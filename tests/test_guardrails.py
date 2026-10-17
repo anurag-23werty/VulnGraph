@@ -71,8 +71,27 @@ def test_run_agentic_security_audit_pipeline():
         risk_score=7.34,
         services=["api-gateway"],
         packages=["urllib3"],
-        evidence=["api-gateway -> payments-db"]
+        evidence=["api-gateway -> auth-service"]
     )
     assert audit["status"] == "VERIFIED"
     assert audit["all_passed"] is True
     assert len(audit["audit_hash"]) == 64
+    assert "signature" in audit
+    assert len(audit["signature"]) == 64
+    assert audit["prev_hash"] is not None
+
+
+def test_deep_edge_verification_hallucination():
+    """Verify that hallucinated relationships between valid entities are caught."""
+    from security_guardrails import verify_path_edges_exist
+
+    # Valid real call path in FalkorDB (api-gateway CALLS auth-service)
+    valid, broken = verify_path_edges_exist(["api-gateway -> auth-service"])
+    assert valid is True
+    assert len(broken) == 0
+
+    # Hallucinated edge (no edge exists between analytics-worker and customer-pii-db)
+    invalid, broken_edges = verify_path_edges_exist(["analytics-worker -> customer-pii-db"])
+    assert invalid is False
+    assert len(broken_edges) > 0
+    assert "No edge in FalkorDB" in broken_edges[0]
