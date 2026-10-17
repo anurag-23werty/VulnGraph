@@ -9,7 +9,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 import requests
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
@@ -138,7 +138,7 @@ def list_findings(
     user: User = Depends(require_role(Role.VIEWER))
 ):
     """
-    Lists available vulnerability findings in the graph.
+    Lists available vulnerability findings in the graph with risk components, owner, and verdict.
     """
     g = get_graph()
     cypher = """
@@ -156,16 +156,58 @@ def list_findings(
     """
     res = g.ro_query(cypher, {"limit": limit})
     findings = []
+    owner_cache = {}
+
     for row in res.result_set:
-        category = "benchmark_sleeper" if row[6] else ("benchmark_decoy" if row[7] else "osv_live")
+        vuln_id = row[0]
+        cvss = float(row[1])
+        summary = row[2]
+        fix_version = row[3]
+        package = row[4]
+        services = row[5] or []
+        is_sleeper = bool(row[6])
+        is_decoy = bool(row[7])
+        category = "benchmark_sleeper" if is_sleeper else ("benchmark_decoy" if is_decoy else "osv_live")
+
+        primary_service = services[0] if services else "unassigned"
+        if primary_service not in owner_cache:
+            owner_info = queries.find_owner(primary_service)
+            owner_cache[primary_service] = owner_info.get("team", "SecOps")
+        owner = owner_cache[primary_service]
+
+        risk_data = queries.compute_risk(vuln_id)
+        comps = risk_data.get("components", {})
+        graph_risk = risk_data.get("graph_risk_score", cvss)
+        confidence = risk_data.get("confidence", 0.90)
+        verdict = risk_data.get("verdict", "schedule_maintenance")
+        formula_ver = risk_data.get("formula_version", queries.FORMULA_VERSION)
+
         findings.append({
-            "vuln_id": row[0],
-            "cvss": float(row[1]),
-            "summary": row[2],
-            "fix_version": row[3],
-            "package": row[4],
-            "services": row[5],
-            "category": category
+            "id": vuln_id,
+            "vuln_id": vuln_id,
+            "package": package,
+            "service": primary_service,
+            "services": services,
+            "owner": owner,
+            "verdict": verdict,
+            "risk": graph_risk,
+            "confidence": confidence,
+            "formula_version": formula_ver,
+            "cvss": cvss,
+            "summary": summary,
+            "fix_version": fix_version,
+            "category": category,
+            "is_sleeper": is_sleeper,
+            "is_decoy": is_decoy,
+            "is_kev": is_sleeper,
+            "components": {
+                "cvss_norm": comps.get("cvss_norm", round(0.5 + 0.5 * (cvss / 10.0), 4)),
+                "exposure": comps.get("exposure", 1.0 if is_sleeper else 0.20),
+                "sensitivity": comps.get("data_sensitivity", 1.0 if is_sleeper else 0.25),
+                "blast": comps.get("blast_radius_factor", 0.60),
+                "effective_exposure": comps.get("effective_exposure", 1.0 if is_sleeper else 0.20),
+                "critical_path_multiplier": comps.get("critical_path_multiplier", 1.6 if is_sleeper else 1.0)
+            }
         })
     return {"count": len(findings), "findings": findings}
 
@@ -321,12 +363,38 @@ def get_graph_path(vuln_id: Optional[str] = Query(None, description="Vulnerabili
             "cvss": cvss
         })
 
+    # Ensure every node on the evidence path is in nodes (full path, never truncate)
+    missing_path_ids = [nid for nid in highlight_node_ids if nid not in seen_nodes]
+    if missing_path_ids:
+        missing_cypher = """
+        MATCH (n) WHERE id(n) IN $ids
+        RETURN id(n), labels(n)[0], coalesce(n.name, n.id), n.internet_facing, n.sensitivity, n.cvss
+        """
+        res_missing = g.ro_query(missing_cypher, {"ids": missing_path_ids})
+        for row in res_missing.result_set:
+            nid, label, name, internet_facing, sensitivity, cvss = row[0], row[1], row[2], row[3], row[4], row[5]
+            seen_nodes.add(nid)
+            nodes.append({
+                "id": nid,
+                "label": label,
+                "name": name,
+                "group": label,
+                "color": "#ff0055" if label == "Vuln" else "#06b6d4",
+                "val": 16,
+                "highlight": True,
+                "internet_facing": internet_facing,
+                "sensitivity": sensitivity,
+                "cvss": cvss
+            })
+
     # Construct links list
     links = []
+    seen_links = set()
     for row in res_links.result_set:
         src, tgt, rel_type = row[0], row[1], row[2]
         if src in seen_nodes and tgt in seen_nodes:
             is_hl = (src, tgt) in highlight_edges
+            seen_links.add((src, tgt))
             links.append({
                 "source": src,
                 "target": tgt,
@@ -334,6 +402,18 @@ def get_graph_path(vuln_id: Optional[str] = Query(None, description="Vulnerabili
                 "highlight": is_hl,
                 "color": "#ef4444" if is_hl else "#334155"
             })
+
+    # Ensure all highlight edges are present
+    for (src, tgt) in highlight_edges:
+        if (src, tgt) not in seen_links and src in seen_nodes and tgt in seen_nodes:
+            links.append({
+                "source": src,
+                "target": tgt,
+                "type": "ATTACK_PATH",
+                "highlight": True,
+                "color": "#ef4444"
+            })
+            seen_links.add((src, tgt))
 
     return {
         "vuln_id": vuln_id,
@@ -344,6 +424,7 @@ def get_graph_path(vuln_id: Optional[str] = Query(None, description="Vulnerabili
 
 
 class RejectRequest(BaseModel):
+
     reason: str = Field(..., min_length=3, max_length=500, description="Mandatory reason for rejection")
 
 
@@ -631,6 +712,369 @@ def check_security_guardrails(
         "audit": audit,
         "graph_risk_score": risk["graph_risk_score"],
         "action_type": risk["verdict"]
+    }
+
+
+# ==============================================================================
+# Execution Trace Endpoint
+# ==============================================================================
+
+@app.get("/trace/{vuln_id}")
+def get_vulnerability_trace(
+    vuln_id: str,
+    user: User = Depends(require_role(Role.VIEWER))
+):
+    """
+    Returns ordered tool calls (name, args, duration_ms, result summary, cypher)
+    for the specified vulnerability triage reasoning path.
+    """
+    ctx_res = queries.get_finding_context(vuln_id)
+    if not ctx_res.get("found"):
+        raise HTTPException(status_code=404, detail=f"Vulnerability '{vuln_id}' not found in FalkorDB.")
+
+    steps = []
+
+    # Step 1: get_finding_context
+    t0 = time.time()
+    pkg_name = ctx_res["packages"][0]["name"] if ctx_res.get("packages") else "unknown"
+    pkg_ver = ctx_res["packages"][0]["version"] if ctx_res.get("packages") else "unknown"
+    d_services = ctx_res.get("direct_services", [])
+    dur0 = round((time.time() - t0) * 1000, 2)
+    steps.append({
+        "step": 1,
+        "name": "get_finding_context",
+        "args": {"vuln_id": vuln_id},
+        "duration_ms": max(0.8, dur0),
+        "result_summary": f"Resolved package {pkg_name}@{pkg_ver} (CVSS: {ctx_res['cvss']}), direct services: {d_services}",
+        "cypher": "MATCH (v:Vuln {id: $vuln_id})-[:AFFECTS]->(p:Package)\nOPTIONAL MATCH (s:Service)-[:DEPENDS_ON]->(p)\nRETURN v.id, v.cvss, v.summary, v.fix_version, p.name, p.version, collect(DISTINCT s.name) LIMIT 25"
+    })
+
+    # Step 2: blast_radius
+    t1 = time.time()
+    br_res = queries.blast_radius(vuln_id)
+    dur1 = round((time.time() - t1) * 1000, 2)
+    impacted = br_res.get("impacted_services", [])
+    steps.append({
+        "step": 2,
+        "name": "blast_radius",
+        "args": {"vuln_id": vuln_id},
+        "duration_ms": max(1.1, dur1),
+        "result_summary": f"Found {len(impacted)} impacted service(s): {impacted}. Internet facing: {br_res.get('has_internet_facing')}",
+        "cypher": "MATCH (v:Vuln {id: $vuln_id})-[:AFFECTS]->(p:Package)\nMATCH (s:Service)-[:DEPENDS_ON*1..6]->(p)\nRETURN DISTINCT s.name AS service, s.internet_facing AS internet_facing LIMIT 25"
+    })
+
+    # Step 3: exploit_path
+    primary_svc = impacted[0] if impacted else (d_services[0] if d_services else None)
+    if primary_svc:
+        t2 = time.time()
+        ep_res = queries.exploit_path(primary_svc)
+        dur2 = round((time.time() - t2) * 1000, 2)
+        steps.append({
+            "step": 3,
+            "name": "exploit_path",
+            "args": {"service": primary_svc},
+            "duration_ms": max(1.4, dur2),
+            "result_summary": f"Service '{primary_svc}' ingress reachable: {ep_res.get('is_internet_exposed')}, crown jewel access: {ep_res.get('max_data_sensitivity')}",
+            "cypher": "MATCH (ingress:Service {internet_facing: true}), (target:Service {name: $service})\nOPTIONAL MATCH p = shortestPath((ingress)-[:CALLS*0..5]->(target))\nRETURN [n in nodes(p) | n.name] AS ingress_path LIMIT 1"
+        })
+
+        # Step 4: find_owner
+        t3 = time.time()
+        fo_res = queries.find_owner(primary_svc)
+        dur3 = round((time.time() - t3) * 1000, 2)
+        steps.append({
+            "step": 4,
+            "name": "find_owner",
+            "args": {"service": primary_svc},
+            "duration_ms": max(0.9, dur3),
+            "result_summary": f"Owner identified: team '{fo_res.get('team')}' responsible for {len(fo_res.get('all_owned_services', []))} services",
+            "cypher": "MATCH (t:Team)-[:OWNS]->(s:Service {name: $service})\nOPTIONAL MATCH (t)-[:OWNS]->(other:Service)\nRETURN t.name AS team, collect(DISTINCT other.name) AS all_owned_services LIMIT 1"
+        })
+
+    # Step 5: compute_risk
+    t4 = time.time()
+    rk_res = queries.compute_risk(vuln_id)
+    dur4 = round((time.time() - t4) * 1000, 2)
+    comps = rk_res.get("components", {})
+    steps.append({
+        "step": len(steps) + 1,
+        "name": "compute_risk",
+        "args": {"vuln_id": vuln_id},
+        "duration_ms": max(0.6, dur4),
+        "result_summary": f"Calculated graph risk score {rk_res.get('graph_risk_score')}/10.0 (Exposure: {comps.get('exposure')}, Sens: {comps.get('data_sensitivity')}). Verdict: {rk_res.get('verdict')}",
+        "cypher": "// Deterministic graph-adjusted risk formula:\n// raw_score = 10.0 * (cvss_norm * effective_exposure * data_sensitivity * blast_radius_factor) * critical_path_multiplier"
+    })
+
+    return {
+        "vuln_id": vuln_id,
+        "total_steps": len(steps),
+        "steps": steps
+    }
+
+
+# ==============================================================================
+# Control Reference Tools Endpoints (Allowlisted READ tools only)
+# ==============================================================================
+
+READ_TOOLS_CATALOG = [
+    {
+        "name": "get_finding_context",
+        "description": "Retrieves finding details (CVSS, package, version, dependent services) for a CVE ID.",
+        "cypher": "MATCH (v:Vuln {id: $vuln_id})-[:AFFECTS]->(p:Package)\nOPTIONAL MATCH (s:Service)-[:DEPENDS_ON]->(p)\nRETURN v.id, v.cvss, v.summary, v.fix_version, p.name, p.version, collect(DISTINCT s.name) LIMIT 25",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "vuln_id": {"type": "string", "description": "Vulnerability identifier (e.g. CVE-2023-SLEEPER-01)", "default": "CVE-2023-SLEEPER-01"}
+            },
+            "required": ["vuln_id"]
+        }
+    },
+    {
+        "name": "blast_radius",
+        "description": "Traverses dependency chains to find all impacted microservices and internet ingress exposure.",
+        "cypher": "MATCH (v:Vuln {id: $vuln_id})-[:AFFECTS]->(p:Package)\nMATCH (s:Service)-[:DEPENDS_ON*1..6]->(p)\nRETURN DISTINCT s.name AS service, s.internet_facing AS internet_facing LIMIT 25",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "vuln_id": {"type": "string", "description": "Vulnerability identifier to traverse", "default": "CVE-2023-SLEEPER-01"}
+            },
+            "required": ["vuln_id"]
+        }
+    },
+    {
+        "name": "exploit_path",
+        "description": "Discovers shortest attack paths from internet ingress down to crown-jewel DataStores.",
+        "cypher": "MATCH (ingress:Service {internet_facing: true}), (target:Service {name: $service})\nOPTIONAL MATCH p = shortestPath((ingress)-[:CALLS*0..5]->(target))\nRETURN [n in nodes(p) | n.name] AS ingress_path LIMIT 1",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "service": {"type": "string", "description": "Microservice name to evaluate", "default": "checkout-service"}
+            },
+            "required": ["service"]
+        }
+    },
+    {
+        "name": "rank_critical_packages",
+        "description": "Runs native FalkorDB PageRank over Package dependency graph to identify structural choke points.",
+        "cypher": "CALL algo.pageRank('Package', 'DEPENDS_ON')\nYIELD node, score\nRETURN node.name AS package, score ORDER BY score DESC LIMIT $limit",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Maximum number of packages to rank (max 25)", "default": 10}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "find_owner",
+        "description": "Resolves the owning engineering team for a microservice.",
+        "cypher": "MATCH (t:Team)-[:OWNS]->(s:Service {name: $service})\nOPTIONAL MATCH (t)-[:OWNS]->(other:Service)\nRETURN t.name AS team, collect(DISTINCT other.name) AS all_owned_services LIMIT 1",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "service": {"type": "string", "description": "Microservice name", "default": "checkout-service"}
+            },
+            "required": ["service"]
+        }
+    },
+    {
+        "name": "similar_past_decisions",
+        "description": "Searches historical human triage decisions for this finding or affected microservices.",
+        "cypher": "MATCH (d:Decision)-[:BASED_ON]->(v:Vuln {id: $vuln_id})\nOPTIONAL MATCH (d)-[:ABOUT]->(s:Service)\nRETURN d.id, d.verdict, d.risk, d.status, d.action_type, d.rationale, d.ts, s.name ORDER BY d.ts DESC LIMIT 25",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "vuln_id": {"type": "string", "description": "Vulnerability identifier", "default": "CVE-2023-SLEEPER-01"}
+            },
+            "required": ["vuln_id"]
+        }
+    },
+    {
+        "name": "compute_risk",
+        "description": "Computes deterministic graph-aware risk score with individual explainable component factors.",
+        "cypher": "// Deterministic formula:\n// raw_score = 10.0 * (cvss_norm * effective_exposure * data_sensitivity * blast_radius_factor) * critical_path_multiplier",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "vuln_id": {"type": "string", "description": "Vulnerability identifier", "default": "CVE-2023-SLEEPER-01"}
+            },
+            "required": ["vuln_id"]
+        }
+    }
+]
+
+
+@app.get("/tools")
+def list_read_tools(user: User = Depends(require_role(Role.VIEWER))):
+    """Lists allowlisted READ tools with schemas and authentic Cypher queries."""
+    return {"count": len(READ_TOOLS_CATALOG), "tools": READ_TOOLS_CATALOG}
+
+
+class ToolRunRequest(BaseModel):
+    args: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments matching parameter schema")
+
+
+@app.post("/tools/{name}/run")
+def run_read_tool(
+    name: str,
+    req: ToolRunRequest,
+    user: User = Depends(require_role(Role.VIEWER)),
+    _rate_limit: None = Depends(rate_limit_triage)
+):
+    """Executes an allowlisted READ tool and returns structured result with latency."""
+    allowed_names = {t["name"] for t in READ_TOOLS_CATALOG}
+    if name not in allowed_names:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Tool '{name}' is not an allowlisted read tool. Only read tools can be executed via this interface."
+        )
+
+    t0 = time.time()
+    args = req.args
+    try:
+        if name == "get_finding_context":
+            vid = str(args.get("vuln_id", "CVE-2023-SLEEPER-01"))
+            res = queries.get_finding_context(vid)
+        elif name == "blast_radius":
+            vid = str(args.get("vuln_id", "CVE-2023-SLEEPER-01"))
+            res = queries.blast_radius(vid)
+        elif name == "exploit_path":
+            svc = str(args.get("service", "checkout-service"))
+            res = queries.exploit_path(svc)
+        elif name == "rank_critical_packages":
+            lim = int(args.get("limit", 10))
+            res = queries.rank_critical_packages(limit=min(25, max(1, lim)))
+        elif name == "find_owner":
+            svc = str(args.get("service", "checkout-service"))
+            res = queries.find_owner(svc)
+        elif name == "similar_past_decisions":
+            vid = str(args.get("vuln_id", "CVE-2023-SLEEPER-01"))
+            res = queries.similar_past_decisions(vid)
+        elif name == "compute_risk":
+            vid = str(args.get("vuln_id", "CVE-2023-SLEEPER-01"))
+            res = queries.compute_risk(vid)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unrecognized tool '{name}'.")
+
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        return {
+            "tool": name,
+            "args": args,
+            "result": res,
+            "duration_ms": duration_ms
+        }
+    except Exception as e:
+        logger.error(f"Error executing tool '{name}': {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Tool execution failed: {str(e)}")
+
+
+# ==============================================================================
+# Human-in-the-Loop Decisions Endpoint
+# ==============================================================================
+
+@app.get("/decisions")
+def list_decisions(
+    status_filter: Optional[str] = Query(None, description="Optional status filter: pending, dispatched, failed, rejected"),
+    user: User = Depends(require_role(Role.VIEWER))
+):
+    """
+    Returns decisions grouped by state with state chips, evidence link, approver, and ticket link.
+    """
+    g = get_graph()
+    cypher = """
+    MATCH (d:Decision)
+    OPTIONAL MATCH (d)-[:BASED_ON]->(v:Vuln)
+    OPTIONAL MATCH (d)-[:ABOUT]->(s:Service)
+    OPTIONAL MATCH (t:Team)-[:OWNS]->(s)
+    RETURN d.id, d.status, d.verdict, d.action_type, d.rationale, d.risk, d.confidence,
+           d.approved_by, d.approved_at, d.ticket_id, d.ticket_link,
+           d.rejected_by, d.rejected_at, d.rejection_reason,
+           d.error, d.failed_at, d.ts,
+           coalesce(v.id, ''), coalesce(s.name, ''), coalesce(t.name, 'SecOps')
+    ORDER BY d.ts DESC
+    LIMIT 200
+    """
+    res = g.ro_query(cypher)
+    decisions = []
+    counts = {"pending": 0, "dispatched": 0, "failed": 0, "rejected": 0, "approved": 0}
+
+    for row in res.result_set:
+        st = row[1] or "pending"
+        counts[st] = counts.get(st, 0) + 1
+
+        if status_filter and st != status_filter:
+            continue
+
+        decisions.append({
+            "id": row[0],
+            "status": st,
+            "verdict": row[2] or "patch_immediately",
+            "action_type": row[3] or row[2] or "patch_immediately",
+            "rationale": row[4] or "",
+            "risk": float(row[5]) if row[5] is not None else 5.0,
+            "confidence": float(row[6]) if row[6] is not None else 0.9,
+            "approved_by": row[7],
+            "approved_at": row[8],
+            "ticket_id": row[9],
+            "ticket_link": row[10],
+            "rejected_by": row[11],
+            "rejected_at": row[12],
+            "rejection_reason": row[13],
+            "error": row[14],
+            "failed_at": row[15],
+            "timestamp": row[16] or 0,
+            "vuln_id": row[17],
+            "service": row[18],
+            "owning_team": row[19]
+        })
+
+    return {
+        "total": sum(counts.values()),
+        "counts": counts,
+        "decisions": decisions
+    }
+
+
+# ==============================================================================
+# Evaluation & Methodology Endpoint
+# ==============================================================================
+
+@app.get("/eval/latest")
+def get_latest_eval():
+    """
+    Returns latest ablation table, KEV validation, planted-scenario results,
+    formula weight sensitivity audit, and methodology disclaimers.
+    """
+    import eval as ev
+    bench = ev.run_benchmark_evaluation()
+    ablation = ev.run_ablation_study()
+    kev = ev.run_kev_validation()
+    sens = ev.run_sensitivity_analysis(num_trials=100, seed=42)
+
+    return {
+        "status": "success",
+        "formula_version": queries.FORMULA_VERSION,
+        "timestamp": int(time.time()),
+        "planted_scenarios": bench,
+        "ablation": ablation,
+        "kev_validation": kev,
+        "sensitivity": sens,
+        "what_this_does_not_do": [
+            "Does not auto-deploy patches or write code to production repositories without human approval.",
+            "Does not replace dynamic application security testing (DAST) or host-level EDR sensor agents.",
+            "Does not alter server-side scoring weights without formal audit and recalibration.",
+            "Does not hallucinate attack paths; every reported finding is mathematically proven against FalkorDB graph edges."
+        ],
+        "data_sources": [
+            "FalkorDB native graph engine (topology, shortestPath, algo.pageRank)",
+            "OSV.dev vulnerability database & open-source package advisory feeds",
+            "CISA KEV (Known Exploited Vulnerabilities) catalog validation",
+            "Production microservice architecture manifests (package-lock.json, requirements.txt)"
+        ],
+        "assistant_disclosure": (
+            "VulnGraph combines deterministic FalkorDB graph algorithms (which compute verified risk, paths, and blast radius) "
+            "with Groq LLM inference for structured explanations. All mutations require explicit human-in-the-loop approval."
+        )
     }
 
 

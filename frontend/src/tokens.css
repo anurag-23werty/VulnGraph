@@ -1,0 +1,170 @@
+/* ==============================================================================
+   VulnGraph Design System Tokens
+   Typographic, quiet, document-like. 1px rules, no shadows, no glassmorphism.
+   ============================================================================== */
+
+:root {
+  /* Surface & Base Palette (Light Theme Default) */
+  --color-paper: #F7F6F3;
+  --color-paper-subtle: #EFEFEA;
+  --color-paper-elevated: #FFFFFF;
+  --color-ink: #141413;
+  --color-muted: #6B6A66;
+  --color-hairline: #E4E2DC;
+  --color-hairline-strong: #D1CEBF;
+
+  /* Semantic State & Severity Colors (Never decoration) */
+  --color-p1: #B3261E;          /* Critical / Immediate action */
+  --color-p1-bg: #FDF2F2;
+  --color-p2: #9A6700;          /* High / Maintenance window */
+  --color-p2-bg: #FEF9EE;
+  --color-p3: #5F6368;          /* Medium / Low priority */
+  --color-p3-bg: #F1F3F4;
+  --color-success: #1F6F43;     /* Approved / Dispatched */
+  --color-success-bg: #EDF7ED;
+
+  /* State badges */
+  --state-pending-text: #9A6700;
+  --state-pending-bg: #FEF9EE;
+  --state-dispatched-text: #1F6F43;
+  --state-dispatched-bg: #EDF7ED;
+  --state-failed-text: #B3261E;
+  --state-failed-bg: #FDF2F2;
+  --state-rejected-text: #5F6368;
+  --state-rejected-bg: #F1F3F4;
+
+  /* Typography */
+  --font-sans: 'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Font Sizes: Headline + At most three body sizes */
+  --text-headline: clamp(2rem, 3.5vw, 2.75rem);
+  --text-title: 1.125rem;       /* 18px */
+  --text-body: 0.9375rem;       /* 15px - primary body */
+  --text-small: 0.8125rem;      /* 13px - secondary / tables / chips */
+  --text-micro: 0.6875rem;      /* 11px - metadata / tags */
+
+  /* Line Heights */
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+
+  /* Spacing Scale (4/8px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Layout */
+  --page-max-width: 1100px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;             /* Radius no more than 6px per quality bar */
+
+  /* Motion: Quick responsive transitions, durations <= 300ms */
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --transition-fast: 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-normal: 250ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Focus visible indicator for accessible keyboard navigation */
+  --focus-ring: 2px solid var(--color-ink);
+  --focus-offset: 2px;
+}
+
+/* Dark Theme via prefers-color-scheme (Verified >= 4.5:1 contrast) */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-paper: #141413;
+    --color-paper-subtle: #1C1B19;
+    --color-paper-elevated: #22211E;
+    --color-ink: #F7F6F3;
+    --color-muted: #A8A7A1;
+    --color-hairline: #2C2B28;
+    --color-hairline-strong: #3F3E3A;
+
+    /* Semantic Colors adapted for dark backgrounds */
+    --color-p1: #E25247;
+    --color-p1-bg: #2B1514;
+    --color-p2: #D19827;
+    --color-p2-bg: #292010;
+    --color-p3: #A8A7A1;
+    --color-p3-bg: #1F1E1B;
+    --color-success: #34A853;
+    --color-success-bg: #11281A;
+
+    --state-pending-text: #E5AC3A;
+    --state-pending-bg: #292010;
+    --state-dispatched-text: #48C76A;
+    --state-dispatched-bg: #11281A;
+    --state-failed-text: #E25247;
+    --state-failed-bg: #2B1514;
+    --state-rejected-text: #A8A7A1;
+    --state-rejected-bg: #1F1E1B;
+
+    --focus-ring: 2px solid var(--color-ink);
+  }
+}
+
+/* Reduced Motion Mode */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Global Reset & Base Typography */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-sans);
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+}
+
+/* Tabular numerals for all score displays and IDs */
+.tnum, code, pre, .mono, [data-tabular] {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+code, pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+
+/* Visible keyboard focus */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* 1px rules */
+hr {
+  border: 0;
+  border-top: 1px solid var(--color-hairline);
+  margin: var(--space-6) 0;
+}

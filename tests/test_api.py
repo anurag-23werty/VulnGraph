@@ -30,7 +30,7 @@ def test_serve_ui_index():
     resp = client.get("/")
     assert resp.status_code == 200
     assert "VulnGraph" in resp.text
-    assert "force-graph" in resp.text
+    assert 'id="root"' in resp.text
 
 
 def test_list_findings():
@@ -164,3 +164,93 @@ def test_reject_decision_flow():
     # 4. Attempting to approve or reject again must return 409 Conflict
     conflict_resp = client.post(f"/reject/{decision_id}", json={"reason": "duplicate rejection"})
     assert conflict_resp.status_code == 409
+
+
+def test_findings_enhanced_contract():
+    """Verifies that GET /findings returns all properties specified in frontend contract."""
+    resp = client.get("/findings?limit=5")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] > 0
+    f = data["findings"][0]
+    # Required keys per backend contract
+    assert "id" in f
+    assert "package" in f
+    assert "service" in f
+    assert "owner" in f
+    assert "verdict" in f
+    assert "risk" in f
+    assert "confidence" in f
+    assert "formula_version" in f
+    assert "components" in f
+    comps = f["components"]
+    assert "cvss_norm" in comps
+    assert "exposure" in comps
+    assert "sensitivity" in comps
+    assert "blast" in comps
+
+
+def test_trace_endpoint():
+    """Verifies GET /trace/{vuln_id} returns ordered tool calls with duration and cypher."""
+    resp = client.get("/trace/CVE-2023-SLEEPER-01")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["vuln_id"] == "CVE-2023-SLEEPER-01"
+    assert "steps" in data
+    assert len(data["steps"]) >= 4
+    step1 = data["steps"][0]
+    assert "name" in step1
+    assert "args" in step1
+    assert "duration_ms" in step1
+    assert "result_summary" in step1
+    assert "cypher" in step1
+
+
+def test_tools_catalog_and_run():
+    """Verifies GET /tools and POST /tools/{name}/run on allowlisted read tools."""
+    resp = client.get("/tools")
+    assert resp.status_code == 200
+    catalog = resp.json()
+    assert "tools" in catalog
+    tool_names = [t["name"] for t in catalog["tools"]]
+    assert "get_finding_context" in tool_names
+    assert "blast_radius" in tool_names
+    assert "propose_action" not in tool_names  # Staged write tool must NOT be in read tools
+
+    # Test running allowlisted read tool
+    run_resp = client.post("/tools/get_finding_context/run", json={"args": {"vuln_id": "CVE-2023-SLEEPER-01"}})
+    assert run_resp.status_code == 200
+    run_data = run_resp.json()
+    assert run_data["tool"] == "get_finding_context"
+    assert "duration_ms" in run_data
+    assert run_data["result"]["found"] is True
+
+    # Test rejecting non-allowlisted tool
+    bad_resp = client.post("/tools/propose_action/run", json={"args": {}})
+    assert bad_resp.status_code == 403
+
+
+def test_decisions_endpoint():
+    """Verifies GET /decisions lists decisions grouped with counts."""
+    resp = client.get("/decisions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "counts" in data
+    assert "decisions" in data
+    assert "total" in data
+    assert data["total"] >= 0
+
+
+def test_eval_latest_endpoint():
+    """Verifies GET /eval/latest returns ablation, KEV validation, and planted scenarios."""
+    resp = client.get("/eval/latest")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert "planted_scenarios" in data
+    assert "ablation" in data
+    assert "kev_validation" in data
+    assert "sensitivity" in data
+    assert "what_this_does_not_do" in data
+    assert data["kev_validation"]["status"] == "VALIDATED"
+    assert data["planted_scenarios"]["inversion_success"] is True
