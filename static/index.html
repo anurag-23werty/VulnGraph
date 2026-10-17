@@ -460,7 +460,8 @@
       document.getElementById('detail-empty').classList.add('hidden');
       document.getElementById('detail-content').classList.remove('hidden');
 
-      document.getElementById('detail-vuln-id').innerText = `${finding.vuln_id} (CVSS: ${finding.cvss_raw} → Graph Risk: ${finding.graph_risk_score})`;
+      const confDisplay = Math.round((finding.confidence || 0.90) * 100);
+      document.getElementById('detail-vuln-id').innerText = `${finding.vuln_id} (CVSS: ${finding.cvss_raw} → Graph Risk: ${finding.graph_risk_score} | Conf: ${confDisplay}%)`;
       
       // OSV metadata population
       const sourceBadge = document.getElementById('detail-source-badge');
@@ -523,13 +524,18 @@
         })
         .catch(() => {});
 
-      // Configure approval button
+      // Configure approval and rejection buttons
       const approvalBox = document.getElementById('detail-approval-box');
       if (finding.decision_id) {
         approvalBox.innerHTML = `
-          <button onclick="approveDecision('${finding.decision_id}')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
-            <span>✓ Approve Ticket (${finding.decision_id})</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button onclick="approveDecision('${finding.decision_id}')" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-1.5 transition">
+              <span>✓ Approve Ticket (${finding.decision_id})</span>
+            </button>
+            <button onclick="rejectDecisionPrompt('${finding.decision_id}')" class="px-3 py-1.5 bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-xs rounded-lg border border-rose-500/40 transition">
+              <span>✕ Reject</span>
+            </button>
+          </div>
         `;
       } else {
         approvalBox.innerHTML = `<span class="text-xs text-slate-500 italic">No staged action required</span>`;
@@ -537,6 +543,28 @@
 
       // Highlight in canvas
       loadGraphPath(finding.vuln_id);
+    }
+
+    // Prompt for decision rejection reason
+    async function rejectDecisionPrompt(decisionId) {
+      const reason = prompt("Enter justification for rejecting this staged mitigation action:");
+      if (!reason || !reason.trim()) return;
+      try {
+        const res = await fetch(`/reject/${encodeURIComponent(decisionId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: reason.trim() })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Decision ${decisionId} rejected.\nReason: ${reason}\nFeedback stored on Decision node in FalkorDB.`);
+          document.getElementById('detail-approval-box').innerHTML = `<span class="text-xs text-rose-400 font-semibold">✕ Rejected (${data.decision_id || decisionId})</span>`;
+        } else {
+          alert(`Rejection failed: ${data.detail || JSON.stringify(data)}`);
+        }
+      } catch (err) {
+        alert(`Network error: ${err}`);
+      }
     }
 
     // Download PDF Dossier
