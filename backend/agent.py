@@ -29,7 +29,8 @@ from models import FindingVerdict, TriageReport, TraceStep, TriageResponse
 from mcp_server import get_tools_for_agent, execute_mcp_tool
 
 BASE_DIR = Path(__file__).resolve().parent
-SYSTEM_PROMPT_PATH = BASE_DIR / "prompts" / "system.md"
+ROOT_DIR = BASE_DIR.parent
+SYSTEM_PROMPT_PATH = ROOT_DIR / "prompts" / "system.md" if (ROOT_DIR / "prompts" / "system.md").exists() else BASE_DIR / "prompts" / "system.md"
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()

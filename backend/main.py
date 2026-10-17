@@ -33,9 +33,10 @@ from auth import Role, User, require_role
 from rate_limiter import rate_limit_triage
 
 BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
+ROOT_DIR = BASE_DIR.parent
+STATIC_DIR = ROOT_DIR / "static" if (ROOT_DIR / "static").exists() else BASE_DIR / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
-TICKETS_FILE = BASE_DIR / "tickets.jsonl"
+TICKETS_FILE = ROOT_DIR / "tickets.jsonl"
 
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 

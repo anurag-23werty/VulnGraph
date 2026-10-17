@@ -61,7 +61,7 @@ To prove that the graph fundamentally alters triage decisions, VulnGraph was eva
 - **3 "Sleepers"**: Medium-CVSS vulnerabilities (5.3 – 6.1) sitting on an active path from an internet-facing ingress service to high-sensitivity DataStores (`payments-db`, `users-pii-db`).
 - **3 "Decoys"**: Critical-CVSS vulnerabilities (9.6 – 9.8) isolated inside unreachable internal services (`analytics-worker`) with zero access to sensitive data.
 
-### Empirical Evaluation Results (`python eval.py`):
+### Empirical Evaluation Results (`python backend/eval.py`):
 
 | Vulnerability ID | Type | CVSS (Naive) | CVSS Rank | Graph Risk | Confidence | Graph Rank | Rank Delta | Triage Action | Critical Attack Path? |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- | :---: |
@@ -80,9 +80,9 @@ To prove that the graph fundamentally alters triage decisions, VulnGraph was eva
 
 ## Empirical Validation: Ablation Study & Sensitivity Check
 
-To rigorously prove that the risk scoring formula is mathematically grounded and not overfit to magic numbers, `eval.py` provides an **Ablation Study** and a **Sensitivity Audit**.
+To rigorously prove that the risk scoring formula is mathematically grounded and not overfit to magic numbers, `backend/eval.py` provides an **Ablation Study** and a **Sensitivity Audit**.
 
-### 1. Scoring Ablation Study (`python eval.py --ablation`)
+### 1. Scoring Ablation Study (`python backend/eval.py --ablation`)
 Isolates the exact mathematical contribution of each graph component across four cumulative stages:
 
 | Vulnerability ID | Type | Stage 1 (CVSS Only) | Stage 2 (+Exposure) | Stage 3 (+Sensitivity) | Stage 4 (Full Graph) |
@@ -97,7 +97,7 @@ Isolates the exact mathematical contribution of each graph component across four
 
 > **Conclusion**: In Stage 1, naive CVSS fails completely (-4.50 pt deficit). Adding exposure floor and network reachability flips the margin positive (+5.67 pts). Factoring crown-jewel sensitivity and multi-hop blast radius provides clean separation (+7.04 pts) on an actionable 0–10 enterprise scale.
 
-### 2. Formula Weight Sensitivity Check (`python eval.py --sensitivity`)
+### 2. Formula Weight Sensitivity Check (`python backend/eval.py --sensitivity`)
 Perturbs all 5 formula weight dimensions by **±10%** across 100 randomized Monte Carlo trials:
 
 | Metric | Result |
@@ -264,9 +264,40 @@ python scripts/restore.py --file backups/vulngraph_snapshot_<timestamp>.json
 ### 3. Schema Migrations
 Apply versioned Cypher migrations idempotently without resetting graph state:
 ```bash
-python migrate.py
+python backend/migrate.py
 ```
 *Migrations are tracked in `(:SchemaMigration)` nodes inside FalkorDB.*
+
+---
+
+## Repository Structure
+
+```
+VulnGraph/
+├── backend/            # FastAPI API server, FalkorDB queries, LangGraph agent & FastMCP
+│   ├── main.py         # Application entrypoint & REST API endpoints
+│   ├── agent.py        # Autonomous Groq triage agent
+│   ├── queries.py      # FalkorDB Cypher traversals & risk scoring engine
+│   ├── mcp_server.py   # FastMCP read tools interface
+│   ├── langgraph_workflow.py # LangGraph multi-agent triage loop
+│   ├── security_guardrails.py # Input verification & HMAC signatures
+│   ├── pdf_generator.py # Incident report dossier generator
+│   ├── ingest.py       # Graph ingestion pipeline & scenario builder
+│   ├── migrate.py      # Cypher schema migrations runner
+│   └── eval.py         # Ground-truth ablation studies & sensitivity checks
+├── frontend/           # Vite + React 18 + TypeScript strict UI (dialkit-inspired)
+├── static/             # Production static bundle served by FastAPI
+├── tests/              # 61 pytest integration & unit tests
+├── docs/               # Technical documentation, Cypher reference & demo script
+├── data/               # Software manifests, OSV cache, and eval results
+├── reports/            # Generated incident PDF dossiers
+├── migrations/         # Cypher schema migration files
+├── prompts/            # Agent system prompt templates
+├── scripts/            # FalkorDB snapshot backup and disaster recovery tools
+├── backups/            # Serialized graph snapshots
+├── Dockerfile          # Production multi-stage Docker build
+└── docker-compose.yml  # Container orchestration with FalkorDB
+```
 
 ---
 
@@ -299,13 +330,13 @@ python migrate.py
 4. **Install Dependencies & Ingest Graph**:
    ```bash
    pip install -r requirements.txt
-   python migrate.py
-   python ingest.py
+   python backend/migrate.py
+   python backend/ingest.py
    ```
 
 5. **Launch Application**:
    ```bash
-   python main.py
+   python backend/main.py
    ```
    *Open `http://localhost:8000` in your browser.*
 

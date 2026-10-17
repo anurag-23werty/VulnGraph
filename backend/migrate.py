@@ -14,7 +14,9 @@ from typing import List, Tuple
 from schema import get_graph
 
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
+MIGRATIONS_DIR = ROOT_DIR / "migrations" if (ROOT_DIR / "migrations").exists() else BASE_DIR / "migrations"
 
 
 def get_applied_migrations(graph) -> List[int]:

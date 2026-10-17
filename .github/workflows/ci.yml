@@ -47,16 +47,18 @@ jobs:
           FALKORDB_HOST: localhost
           FALKORDB_PORT: 6379
           FALKORDB_GRAPH: vulngraph
+          PYTHONPATH: backend:.
         run: |
-          python migrate.py
+          python backend/migrate.py
 
       - name: Ingest Planted Scenarios & OSV Graph
         env:
           FALKORDB_HOST: localhost
           FALKORDB_PORT: 6379
           FALKORDB_GRAPH: vulngraph
+          PYTHONPATH: backend:.
         run: |
-          python ingest.py
+          python backend/ingest.py
 
       - name: Run Complete Pytest Suite
         env:
@@ -73,8 +75,9 @@ jobs:
           FALKORDB_HOST: localhost
           FALKORDB_PORT: 6379
           FALKORDB_GRAPH: vulngraph
+          PYTHONPATH: backend:.
         run: |
-          python eval.py --all --markdown
+          python backend/eval.py --all --markdown
 
       - name: Security Vulnerability Scan (pip-audit)
         run: |

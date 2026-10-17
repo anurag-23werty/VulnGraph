@@ -38,7 +38,7 @@ COPY --from=builder /root/.local /app/.local
 
 # Ensure packages on PATH and Python knows app root
 ENV PATH=/app/.local/bin:$PATH \
-    PYTHONPATH=/app \
+    PYTHONPATH=/app/backend:/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -64,4 +64,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/health || exit 1
 
 # Production Entrypoint
-CMD ["python", "main.py"]
+CMD ["python", "backend/main.py"]

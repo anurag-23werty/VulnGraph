@@ -22,8 +22,10 @@ load_dotenv()
 from schema import get_graph, init_schema, clear_graph
 
 BASE_DIR = Path(__file__).resolve().parent
-MANIFESTS_DIR = BASE_DIR / "data" / "manifests"
-CACHE_DIR = BASE_DIR / "data" / "osv_cache"
+ROOT_DIR = BASE_DIR.parent
+DATA_DIR = ROOT_DIR / "data" if (ROOT_DIR / "data").exists() else BASE_DIR / "data"
+MANIFESTS_DIR = DATA_DIR / "manifests"
+CACHE_DIR = DATA_DIR / "osv_cache"
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
