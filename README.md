@@ -361,4 +361,4 @@ In adherence to the **Graph Hacks Hackathon Rules & Guidelines**:
 ---
 
 ## License
-MIT License. Open source and built for the FalkorDB Graph Hacks Hackathon 2025.
+MIT License. Open source and built for the FalkorDB Graph Hacks Hackathon 2026.
