@@ -4,6 +4,7 @@ import { getFindings, getTools, getDecisions, getLatestEval } from './api/client
 import { DEFAULT_WHAT_IF_PARAMS, type WhatIfParams } from './lib/formula';
 import { WhatIfControls } from './components/WhatIfControls';
 import { RankingView } from './components/RankingView';
+import { EvidencePanel } from './components/EvidencePanel';
 
 export default function App() {
   const [viewMode, setViewMode] = useState<'analyst' | 'trace'>('analyst');
@@ -24,6 +25,11 @@ export default function App() {
 
   // Auto-select first sleeper if none selected
   const activeVulnId = selectedVulnId || (findings.length > 0 ? findings[0].id : null);
+  const selectedFinding = useMemo(
+    () => findings.find((f) => f.id === activeVulnId) || null,
+    [findings, activeVulnId]
+  );
+
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -249,9 +255,19 @@ export default function App() {
             findings={findings}
             whatIfParams={whatIfParams}
             selectedVulnId={activeVulnId}
-            onSelectFinding={(id) => setSelectedVulnId(id)}
+            onSelectFinding={(id) => {
+              setSelectedVulnId(id);
+              const el = document.getElementById('evidence');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }}
           />
         )}
+
+        {/* 3. Evidence Panel: Force Graph & Step Trace beside each other */}
+        {activeVulnId && (
+          <EvidencePanel vulnId={activeVulnId} finding={selectedFinding} />
+        )}
+
 
         {/* Raw Trace Mode Drawer (Shows raw tool calls and JSON everywhere when Trace is active) */}
         {viewMode === 'trace' && (
