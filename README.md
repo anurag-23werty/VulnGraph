@@ -1,6 +1,6 @@
 # VulnGraph: Graph-Aware Vulnerability Triage Agent
 
-[![FalkorDB Hackathon](https://img.shields.io/badge/Graph_Hacks_2025-Track_01:_Agents_That_Act_on_Connected_Data-red.svg)](https://falkordb.com)
+[![FalkorDB Hackathon](https://img.shields.io/badge/Graph_Hacks_2026-Track_01:_Agents_That_Act_on_Connected_Data-red.svg)](https://falkordb.com)
 [![FalkorDB Primary DB](https://img.shields.io/badge/Primary_DB-FalkorDB-orange.svg)](https://falkordb.com)
 [![Model](https://img.shields.io/badge/Agent_LLM-Groq_Llama--3.3--70B-green.svg)](https://groq.com)
 [![LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-blue.svg)](https://langchain-ai.github.io/langgraph/)
