@@ -1,7 +1,8 @@
 # ==============================================================================
-# VulnGraph Production Multi-Stage Dockerfile
-# Stage 1: Dependency Builder
-# Stage 2: Hardened Non-Root Minimal Runtime
+# VulnGraph Production Multi-Stage Dockerfile (Self-Contained Fullstack & DB)
+# Supports:
+#   1. Standalone deployment on Render/Railway/Fly (embedded FalkorDB)
+#   2. Orchestrated deployment with Docker Compose (external FalkorDB)
 # ==============================================================================
 
 # ----------------- Stage 1: Build Dependencies -----------------
@@ -24,14 +25,23 @@ FROM python:3.11-slim AS runner
 
 WORKDIR /app
 
-# Create non-root system user and group
-RUN groupadd -r -g 10001 appgroup && \
-    useradd -r -u 10001 -g appgroup -d /app -s /sbin/nologin appuser
-
-# Install minimal runtime dependencies (curl for container healthcheck)
+# Install minimal runtime dependencies (curl for healthcheck, libgomp1/libssl3 for FalkorDB engine)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    libgomp1 \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy FalkorDB Graph Engine & Redis binaries
+COPY --from=falkordb/falkordb:latest /usr/local/bin/redis-server /usr/local/bin/redis-server
+COPY --from=falkordb/falkordb:latest /usr/local/bin/redis-cli /usr/local/bin/redis-cli
+COPY --from=falkordb/falkordb:latest /var/lib/falkordb /var/lib/falkordb
+
+# Create non-root system user and group
+RUN groupadd -r -g 10001 appgroup && \
+    useradd -r -u 10001 -g appgroup -d /app -s /sbin/nologin appuser && \
+    mkdir -p /var/lib/falkordb/data && \
+    chown -R appuser:appgroup /var/lib/falkordb
 
 # Copy installed Python packages from builder stage
 COPY --from=builder /root/.local /app/.local
@@ -44,15 +54,16 @@ ENV PATH=/app/.local/bin:$PATH \
 
 # Copy application files with appuser ownership
 COPY --chown=appuser:appgroup . .
+RUN chmod +x /app/start.sh
 
 # Set non-root user execution
 USER 10001:10001
 
-# Expose FastAPI Web UI & API port
+# Expose default port
 EXPOSE 8000
 
-# Default environment configuration
-ENV FALKORDB_HOST=falkordb \
+# Default environment configuration (defaults to localhost for embedded FalkorDB)
+ENV FALKORDB_HOST=localhost \
     FALKORDB_PORT=6379 \
     FALKORDB_GRAPH=vulngraph \
     API_PORT=8000 \
@@ -60,8 +71,8 @@ ENV FALKORDB_HOST=falkordb \
     API_RELOAD=false
 
 # Container Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/api/health || exit 1
 
 # Production Entrypoint
-CMD ["python", "backend/main.py"]
+CMD ["/app/start.sh"]
