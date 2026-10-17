@@ -6,8 +6,10 @@ import { WhatIfControls } from './components/WhatIfControls';
 import { RankingView } from './components/RankingView';
 import { EvidencePanel } from './components/EvidencePanel';
 import { ToolsReference } from './components/ToolsReference';
+import { ActionsPanel } from './components/ActionsPanel';
 
 export default function App() {
+
 
   const [viewMode, setViewMode] = useState<'analyst' | 'trace'>('analyst');
   const [whatIfParams, setWhatIfParams] = useState<WhatIfParams>(DEFAULT_WHAT_IF_PARAMS);
@@ -272,6 +274,16 @@ export default function App() {
 
         {/* 4. Tools Control Reference */}
         <ToolsReference />
+
+        {/* 5. Actions: Decisions grouped by state with inline confirm */}
+        <ActionsPanel
+          onSelectFinding={(id) => {
+            setSelectedVulnId(id);
+            const el = document.getElementById('evidence');
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+          }}
+        />
+
 
 
 
