@@ -116,20 +116,54 @@ def test_approve_decision_flow():
     assert resp.status_code == 200
     res_data = resp.json()
 
-    assert res_data["status"] == "approved"
+    assert res_data["status"] == "dispatched"
     assert "ticket_id" in res_data
     assert res_data["ticket_id"].startswith("TICK-")
     assert res_data["decision_id"] == decision_id
 
-    # 3. Verify in FalkorDB directly that status is 'approved'
+    # 3. Verify in FalkorDB directly that status is 'dispatched'
     g = get_graph()
-    q_check = "MATCH (d:Decision {id: $id}) RETURN d.status"
+    q_check = "MATCH (d:Decision {id: $id}) RETURN d.status, d.approved_by"
     db_res = g.query(q_check, {"id": decision_id})
-    assert db_res.result_set[0][0] == "approved"
+    assert db_res.result_set[0][0] == "dispatched"
+    assert db_res.result_set[0][1] is not None
 
-    # 4. Check /tickets endpoint to ensure ticket was recorded in tickets.jsonl
+    # 4. Double-approval test: attempting to approve again must return 409 Conflict
+    double_resp = client.post(f"/approve/{decision_id}")
+    assert double_resp.status_code == 409
+
+    # 5. Check /tickets endpoint to ensure ticket was recorded in tickets.jsonl
     tickets_resp = client.get("/tickets")
     assert tickets_resp.status_code == 200
     tickets_data = tickets_resp.json()
     assert tickets_data["count"] > 0
     assert any(t["decision_id"] == decision_id for t in tickets_data["tickets"])
+
+
+def test_reject_decision_flow():
+    """Verify atomic rejection state transition and feedback recording."""
+    # 1. Stage a proposal
+    staged = queries.propose_action(
+        vuln_id="CVE-2021-DECOY-01",
+        action_type="deprioritize",
+        rationale="Internal offline analytics service with zero ingress paths.",
+        evidence=[]
+    )
+    decision_id = staged["decision_id"]
+
+    # 2. Reject with mandatory reason
+    resp = client.post(f"/reject/{decision_id}", json={"reason": "Compensating controls insufficient; requires maintenance window."})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "rejected"
+    assert data["decision_id"] == decision_id
+
+    # 3. Verify in FalkorDB
+    g = get_graph()
+    db_res = g.ro_query("MATCH (d:Decision {id: $id}) RETURN d.status, d.rejection_reason", {"id": decision_id})
+    assert db_res.result_set[0][0] == "rejected"
+    assert "Compensating controls" in db_res.result_set[0][1]
+
+    # 4. Attempting to approve or reject again must return 409 Conflict
+    conflict_resp = client.post(f"/reject/{decision_id}", json={"reason": "duplicate rejection"})
+    assert conflict_resp.status_code == 409

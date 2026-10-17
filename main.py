@@ -342,61 +342,61 @@ def get_graph_path(vuln_id: Optional[str] = Query(None, description="Vulnerabili
     }
 
 
+class RejectRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500, description="Mandatory reason for rejection")
+
+
 @app.post("/approve/{decision_id}")
-def approve_decision(decision_id: str):
+def approve_decision(
+    decision_id: str,
+    user: User = Depends(require_role(Role.APPROVER))
+):
     """
-    HUMAN-IN-THE-LOOP APPROVAL ENDPOINT:
-    Approves a staged Decision node in FalkorDB, writes the verified action ticket
-    to tickets.jsonl, and optionally notifies Slack.
+    Atomic State Machine Transition (pending -> approving -> dispatched):
+      1. Claim: pending -> approving (atomic CAS via Cypher; prevents double-approval)
+      2. Dispatch: external ticket with idempotency_key=decision_id
+      3. Result: approving -> dispatched OR approving -> failed (retryable)
     """
     g = get_graph()
+    now_ts = int(time.time())
 
-    # 1. Fetch decision and connected context
-    fetch_cypher = """
-    MATCH (d:Decision {id: $id})
+    # Step 1: Atomic Claim Transition (pending -> approving)
+    claim_cypher = """
+    MATCH (d:Decision {id: $id, status: 'pending'})
     OPTIONAL MATCH (d)-[:BASED_ON]->(v:Vuln)
     OPTIONAL MATCH (d)-[:ABOUT]->(s:Service)
     OPTIONAL MATCH (t:Team)-[:OWNS]->(s)
-    RETURN d.id AS decision_id,
-           d.status AS status,
-           d.verdict AS verdict,
-           d.action_type AS action_type,
-           d.rationale AS rationale,
-           d.risk AS risk,
-           coalesce(v.id, 'unknown-vuln') AS vuln_id,
-           coalesce(s.name, 'unassigned-service') AS service,
-           coalesce(t.name, 'security-squad') AS team
+    SET d.status = 'approving', d.approved_by = $user, d.approved_at = $ts
+    RETURN d.id, d.verdict, d.action_type, d.rationale, d.risk,
+           coalesce(v.id, 'unknown-vuln'), coalesce(s.name, 'unassigned-service'), coalesce(t.name, 'SecOps')
     """
-    res = g.query(fetch_cypher, {"id": decision_id})
+    res = g.query(claim_cypher, {
+        "id": decision_id,
+        "user": user.username,
+        "ts": now_ts
+    })
+
     if not res.result_set:
+        # Check if already processed
+        check_res = g.ro_query("MATCH (d:Decision {id: $id}) RETURN d.status, d.approved_by, d.ticket_id", {"id": decision_id})
+        if check_res.result_set:
+            status_val, approved_by, tid = check_res.result_set[0]
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Decision '{decision_id}' is already '{status_val}' (handled by {approved_by or 'system'}, ticket: {tid or 'N/A'})."
+            )
         raise HTTPException(status_code=404, detail=f"Decision with ID '{decision_id}' not found.")
 
     row = res.result_set[0]
-    curr_status = row[1]
-    if curr_status == "approved":
-        return {
-            "status": "already_approved",
-            "decision_id": decision_id,
-            "message": f"Decision '{decision_id}' was already approved."
-        }
+    did, verdict, action_type, rationale, risk, vuln_id, service, team = row
 
-    verdict, action_type, rationale, risk, vuln_id, service, team = (
-        row[2], row[3], row[4], row[5], row[6], row[7], row[8]
-    )
+    # Step 2: Idempotent Ticket Dispatch
+    ticket_id = f"TICK-{uuid.uuid5(uuid.NAMESPACE_DNS, decision_id).hex[:8].upper()}"
+    ticket_link = f"https://tracker.internal/tickets/{ticket_id}"
 
-    # 2. Update status in FalkorDB
-    now_ts = int(time.time())
-    update_cypher = """
-    MATCH (d:Decision {id: $id})
-    SET d.status = 'approved', d.approved_at = $ts
-    RETURN d.id, d.status
-    """
-    g.query(update_cypher, {"id": decision_id, "ts": now_ts})
-
-    # 3. Create ticket record in tickets.jsonl
-    ticket_id = f"TICK-{uuid.uuid4().hex[:6].upper()}"
     ticket_record = {
         "ticket_id": ticket_id,
+        "idempotency_key": decision_id,
         "decision_id": decision_id,
         "vuln_id": vuln_id,
         "action_type": action_type or verdict,
@@ -404,19 +404,25 @@ def approve_decision(decision_id: str):
         "owning_team": team,
         "risk_score": float(risk) if risk is not None else 5.0,
         "rationale": rationale,
-        "status": "created",
-        "approved_at": now_ts
+        "approved_by": user.username,
+        "ticket_link": ticket_link,
+        "status": "dispatched",
+        "timestamp": now_ts
     }
+
+    dispatch_success = True
+    dispatch_error = None
+    slack_notified = False
 
     try:
         with open(TICKETS_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(ticket_record) + "\n")
     except Exception as e:
-        print(f"[Tickets] Error saving to tickets.jsonl: {e}")
+        dispatch_success = False
+        dispatch_error = f"Storage failure: {str(e)}"
 
-    # 4. Optional Slack webhook dispatch
-    slack_notified = False
-    if SLACK_WEBHOOK_URL and SLACK_WEBHOOK_URL.startswith("http"):
+    # Optional Slack Webhook Dispatch with response verification
+    if dispatch_success and SLACK_WEBHOOK_URL and SLACK_WEBHOOK_URL.startswith("http"):
         try:
             payload = {
                 "text": (
@@ -425,23 +431,98 @@ def approve_decision(decision_id: str):
                     f"• *Finding*: `{vuln_id}`\n"
                     f"• *Assigned Team*: *{team}* ({service})\n"
                     f"• *Action*: `{action_type}` (Risk: {risk}/10.0)\n"
+                    f"• *Approved By*: {user.username}\n"
                     f"• *Rationale*: {rationale}"
                 )
             }
-            requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=3)
-            slack_notified = True
+            resp = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=3)
+            if resp.status_code < 300:
+                slack_notified = True
+            else:
+                logger.warning(f"Slack webhook returned status {resp.status_code}")
         except Exception as e:
-            print(f"[Slack Webhook] Failed to dispatch: {e}")
+            logger.warning(f"Slack webhook dispatch error: {e}")
 
+    # Step 3: Transition to Dispatched or Failed
+    if dispatch_success:
+        complete_cypher = """
+        MATCH (d:Decision {id: $id})
+        SET d.status = 'dispatched', d.ticket_id = $ticket_id, d.ticket_link = $ticket_link, d.dispatched_at = $ts
+        RETURN d.id
+        """
+        g.query(complete_cypher, {"id": decision_id, "ticket_id": ticket_id, "ticket_link": ticket_link, "ts": now_ts})
+        logger.info(f"Decision '{decision_id}' dispatched as ticket '{ticket_id}' by {user.username}")
+        return {
+            "status": "dispatched",
+            "decision_id": decision_id,
+            "ticket_id": ticket_id,
+            "ticket_link": ticket_link,
+            "approved_by": user.username,
+            "owning_team": team,
+            "service": service,
+            "slack_notified": slack_notified,
+            "message": f"Decision approved. Ticket {ticket_id} dispatched to team '{team}'."
+        }
+    else:
+        fail_cypher = """
+        MATCH (d:Decision {id: $id})
+        SET d.status = 'failed', d.error = $error, d.failed_at = $ts
+        RETURN d.id
+        """
+        g.query(fail_cypher, {"id": decision_id, "error": dispatch_error, "ts": now_ts})
+        logger.error(f"Decision '{decision_id}' dispatch failed: {dispatch_error}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ticket dispatch failed (marked as retryable failed state): {dispatch_error}"
+        )
+
+
+@app.post("/reject/{decision_id}")
+def reject_decision(
+    decision_id: str,
+    req: RejectRequest,
+    user: User = Depends(require_role(Role.APPROVER))
+):
+    """
+    Atomic State Machine Transition (pending -> rejected):
+      Records human feedback and rejection rationale for risk weight recalibration.
+    """
+    g = get_graph()
+    now_ts = int(time.time())
+
+    reject_cypher = """
+    MATCH (d:Decision {id: $id, status: 'pending'})
+    SET d.status = 'rejected',
+        d.rejected_by = $user,
+        d.rejection_reason = $reason,
+        d.rejected_at = $ts
+    RETURN d.id
+    """
+    res = g.query(reject_cypher, {
+        "id": decision_id,
+        "user": user.username,
+        "reason": req.reason,
+        "ts": now_ts
+    })
+
+    if not res.result_set:
+        check_res = g.ro_query("MATCH (d:Decision {id: $id}) RETURN d.status", {"id": decision_id})
+        if check_res.result_set:
+            status_val = check_res.result_set[0][0]
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot reject decision '{decision_id}' with status '{status_val}'."
+            )
+        raise HTTPException(status_code=404, detail=f"Decision with ID '{decision_id}' not found.")
+
+    logger.info(f"Decision '{decision_id}' rejected by {user.username}. Reason: {req.reason}")
     return {
-        "status": "approved",
-        "ticket_id": ticket_id,
+        "status": "rejected",
         "decision_id": decision_id,
-        "vuln_id": vuln_id,
-        "service": service,
-        "owning_team": team,
-        "slack_notified": slack_notified,
-        "message": f"Decision approved. Ticket {ticket_id} dispatched to team '{team}'."
+        "rejected_by": user.username,
+        "reason": req.reason,
+        "timestamp": now_ts,
+        "message": f"Decision '{decision_id}' rejected. Feedback recorded for calibration."
     }
 
 
