@@ -1098,7 +1098,7 @@ def serve_ui():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("API_PORT", "8000"))
+    port = int(os.getenv("PORT") or os.getenv("API_PORT", "8000"))
     host = os.getenv("API_HOST", "0.0.0.0")
     reload = os.getenv("API_RELOAD", "false").lower() == "true"
     print(f"Starting VulnGraph API server on http://{host}:{port} (reload={reload})")

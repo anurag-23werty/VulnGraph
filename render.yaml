@@ -1,0 +1,45 @@
+# ==============================================================================
+# VulnGraph Render Blueprint Specification (render.yaml)
+# Connects FalkorDB Graph Database & VulnGraph Web Service automatically.
+# Docs: https://render.com/docs/blueprint-spec
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. FalkorDB Graph Database Engine (Private Service)
+  # ----------------------------------------------------------------------------
+  - type: pserv
+    name: falkordb
+    runtime: image
+    image:
+      url: falkordb/falkordb:latest
+    envVars:
+      - key: PORT
+        value: 6379
+
+  # ----------------------------------------------------------------------------
+  # 2. VulnGraph Web Application & API (Public Web Service)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: vulngraph-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: FALKORDB_HOST
+        fromService:
+          type: pserv
+          name: falkordb
+          property: host
+      - key: FALKORDB_PORT
+        value: 6379
+      - key: FALKORDB_GRAPH
+        value: vulngraph
+      - key: GROQ_API_KEY
+        sync: false # Render dashboard will prompt you to enter your Groq API key
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: VULNGRAPH_SIGNING_KEY
+        generateValue: true # Render generates a secure random secret
+      - key: API_RELOAD
+        value: "false"
