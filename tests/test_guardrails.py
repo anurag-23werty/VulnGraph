@@ -2,7 +2,6 @@
 Tests for Agentic Security Guardrails (security_guardrails.py).
 """
 
-import pytest
 from security_guardrails import (
     sanitize_external_text,
     verify_graph_entities_exist,

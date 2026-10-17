@@ -22,7 +22,6 @@ Evaluates:
      - Demonstrates rank delta: (Graph Risk Rank - CVSS Rank).
 """
 
-import sys
 import json
 import random
 import argparse
@@ -402,7 +401,7 @@ def main():
         print(f"Successfully evaluated {corpus['total_evaluated']} vulnerabilities across the live FalkorDB graph.")
         print("Top 5 prioritized findings by Graph Risk:")
         for idx, item in enumerate(corpus['top_by_graph'][:5], 1):
-            print(f"  #{idx}: {item['vuln_id']} -> Graph Risk: {item['graph_risk']} (Conf: {int(item.get('confidence', 0.9)*100)}%, CVSS: {item['cvss']}, Action: {item['action']})")
+            print(f"  #{idx}: {item['vuln_id']} -> Graph Risk: {item['graph_risk']} (Conf: {int(item.get('confidence', 0.9) * 100)}%, CVSS: {item['cvss']}, Action: {item['action']})")
 
     if args.save_json:
         payload = {

@@ -4,7 +4,6 @@ Tests all functions in queries.py against the planted enterprise graph data in F
 """
 
 import pytest
-import os
 import sys
 from pathlib import Path
 

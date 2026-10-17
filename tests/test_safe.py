@@ -4,7 +4,7 @@ Tests for Safe Property (auth.py, rate_limiter.py, logger.py, and trust boundari
 
 from fastapi.testclient import TestClient
 from main import app
-from auth import Role, User, require_role, TOKENS_MAP
+from auth import Role, User, require_role
 from rate_limiter import SlidingWindowRateLimiter
 
 client = TestClient(app)

@@ -12,7 +12,6 @@ Features:
 """
 
 import os
-import sys
 import json
 import time
 import re
@@ -28,7 +27,6 @@ from groq import Groq
 
 from models import FindingVerdict, TriageReport, TraceStep, TriageResponse
 from mcp_server import get_tools_for_agent, execute_mcp_tool
-import queries
 
 BASE_DIR = Path(__file__).resolve().parent
 SYSTEM_PROMPT_PATH = BASE_DIR / "prompts" / "system.md"
@@ -271,7 +269,6 @@ async def run_groq_agent_triage(vuln_ids: List[str], api_key: Optional[str] = No
 
     while step < MAX_STEPS:
         step += 1
-        t_call_start = time.time()
 
         # Call Groq chat completion with backoff
         response = None

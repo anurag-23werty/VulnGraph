@@ -9,7 +9,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 
 import requests
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
@@ -22,14 +22,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from schema import get_graph
-from models import TriageResponse, TriageReport
-from agent import run_groq_agent_triage, run_deterministic_triage
+from models import TriageResponse
+from agent import run_groq_agent_triage
 import queries
 from pdf_generator import generate_incident_pdf
 from langgraph_workflow import run_langgraph_triage
 from security_guardrails import run_agentic_security_audit
 from logger import logger, request_id_ctx
-from auth import Role, User, require_role, get_current_user
+from auth import Role, User, require_role
 from rate_limiter import rate_limit_triage
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -115,6 +115,7 @@ DEFAULT_BENCHMARK_VULNS = [
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health_check():
     """Health check endpoint verifying FalkorDB connectivity."""
     try:
@@ -173,7 +174,7 @@ def list_findings(
 async def triage_findings(
     req: Optional[TriageRequest] = None,
     user: User = Depends(require_role(Role.ANALYST)),
-    _rate_limit = Depends(rate_limit_triage)
+    _rate_limit: None = Depends(rate_limit_triage)
 ):
     """
     Runs the agent to triage findings, compute graph-adjusted risks,
@@ -570,7 +571,7 @@ def export_incident_pdf(vuln_id: str):
 def run_langgraph_agent(
     vuln_id: str,
     user: User = Depends(require_role(Role.ANALYST)),
-    _rate_limit = Depends(rate_limit_triage)
+    _rate_limit: None = Depends(rate_limit_triage)
 ):
     """
     Executes the multi-agent LangGraph triage workflow:
@@ -654,5 +655,6 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("API_PORT", "8000"))
     host = os.getenv("API_HOST", "0.0.0.0")
-    print(f"Starting VulnGraph API server on http://{host}:{port}")
-    uvicorn.run("main:app", host=host, port=port, reload=True)
+    reload = os.getenv("API_RELOAD", "false").lower() == "true"
+    print(f"Starting VulnGraph API server on http://{host}:{port} (reload={reload})")
+    uvicorn.run("main:app", host=host, port=port, reload=reload)

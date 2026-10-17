@@ -3,10 +3,7 @@ Test suite for VulnGraph FastAPI backend endpoints.
 Verifies /health, /findings, /triage, /baseline, /graph/path, /approve/{id}, /tickets, and static UI.
 """
 
-import os
 import sys
-import json
-import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
 
@@ -77,7 +74,7 @@ def test_graph_path_highlighted():
     assert data["highlighted_node_count"] > 0
     # Verify at least one node and link has highlight=True
     assert any(n.get("highlight") is True for n in data["nodes"])
-    assert any(l.get("highlight") is True for l in data["links"])
+    assert any(link.get("highlight") is True for link in data["links"])
 
 
 def test_post_triage_benchmark():

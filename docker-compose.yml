@@ -2,11 +2,13 @@ services:
   falkordb:
     image: falkordb/falkordb:latest
     container_name: vulngraph-falkordb
+    # Bound to local loopback interface only (127.0.0.1) preventing public exposure
     ports:
-      - "6379:6379"   # FalkorDB RESP Engine
-      - "3000:3000"   # FalkorDB Browser UI
+      - "127.0.0.1:6379:6379"   # FalkorDB RESP Engine (localhost only)
     volumes:
       - falkordb_data:/data
+    networks:
+      - vulngraph-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -20,20 +22,29 @@ services:
       dockerfile: Dockerfile
     container_name: vulngraph-app
     ports:
-      - "8000:8000"   # FastAPI Web UI & API
+      - "8000:8000"   # FastAPI Web UI & API Gateway
     environment:
       - FALKORDB_HOST=falkordb
       - FALKORDB_PORT=6379
       - FALKORDB_GRAPH=vulngraph
+      - FALKORDB_PASSWORD=${FALKORDB_PASSWORD:-}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - API_PORT=8000
       - API_HOST=0.0.0.0
+      - API_RELOAD=false
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - VULNGRAPH_SIGNING_KEY=${VULNGRAPH_SIGNING_KEY:-prod_signing_key_secret_2026}
+    networks:
+      - vulngraph-net
     depends_on:
       falkordb:
         condition: service_healthy
     restart: unless-stopped
+
+networks:
+  vulngraph-net:
+    driver: bridge
 
 volumes:
   falkordb_data:

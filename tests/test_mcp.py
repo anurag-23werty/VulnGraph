@@ -3,7 +3,6 @@ Test suite for VulnGraph FastMCP Server.
 Verifies all 8 MCP tools, schema conversion for Mistral, and in-process execution.
 """
 
-import pytest
 import asyncio
 import json
 import sys

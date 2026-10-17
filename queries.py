@@ -9,7 +9,7 @@ All writes create staged Decision nodes with status 'pending' (human-in-the-loop
 import time
 import uuid
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 from schema import get_graph
 
@@ -461,7 +461,7 @@ def propose_action(vuln_id: str, action_type: str, rationale: str, evidence: Lis
     RETURN d.id AS decision_id, d.status AS status
     """
 
-    res = graph.query(cypher, {
+    graph.query(cypher, {
         "vuln_id": vuln_id,
         "id": decision_id,
         "action_type": action_type,

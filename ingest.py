@@ -10,11 +10,10 @@ Data ingestion pipeline for VulnGraph.
 5. Populates FalkorDB graph using parameterized Cypher queries and logs node/edge verification counts.
 """
 
-import os
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import requests
 from dotenv import load_dotenv
 
@@ -595,7 +594,7 @@ def ingest_all():
         total_nodes += cnt
         print(f"  • Node Label :{label:<12} -> {cnt:>3} nodes")
 
-    print(f"  ---------------------------------")
+    print("  ---------------------------------")
     print(f"  • Total Graph Nodes         -> {total_nodes:>3} nodes\n")
 
     rel_types = ["AFFECTS", "DEPENDS_ON", "CALLS", "READS", "OWNS", "BASED_ON", "ABOUT"]
@@ -606,7 +605,7 @@ def ingest_all():
         total_edges += cnt
         print(f"  • Relationship :{rtype:<12} -> {cnt:>3} edges")
 
-    print(f"  ---------------------------------")
+    print("  ---------------------------------")
     print(f"  • Total Graph Edges         -> {total_edges:>3} edges")
     print("=" * 60)
 

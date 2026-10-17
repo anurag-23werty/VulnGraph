@@ -21,13 +21,17 @@ load_dotenv()
 FALKORDB_HOST = os.getenv("FALKORDB_HOST", "localhost")
 FALKORDB_PORT = int(os.getenv("FALKORDB_PORT", "6379"))
 FALKORDB_GRAPH = os.getenv("FALKORDB_GRAPH", "vulngraph")
+FALKORDB_PASSWORD = os.getenv("FALKORDB_PASSWORD", None) or None
 
 
 def get_graph(graph_name: str = FALKORDB_GRAPH):
     """
     Returns a connected FalkorDB graph client instance.
     """
-    client = FalkorDB(host=FALKORDB_HOST, port=FALKORDB_PORT)
+    kwargs = {"host": FALKORDB_HOST, "port": FALKORDB_PORT}
+    if FALKORDB_PASSWORD:
+        kwargs["password"] = FALKORDB_PASSWORD
+    client = FalkorDB(**kwargs)
     return client.select_graph(graph_name)
 
 

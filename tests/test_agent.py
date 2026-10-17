@@ -4,20 +4,18 @@ Test suite for VulnGraph Agent Loop, Verdict Validation, and Trace Logging.
 
 import pytest
 import asyncio
-import json
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from models import FindingVerdict, TriageReport, TraceStep, TriageResponse
+from models import FindingVerdict, TriageResponse
 from agent import (
     load_system_prompt,
     clean_json_text,
     run_deterministic_triage,
-    run_groq_agent_triage,
-    run_mistral_agent_triage
+    run_groq_agent_triage
 )
 
 

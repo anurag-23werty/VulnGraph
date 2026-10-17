@@ -7,7 +7,7 @@ Results are compact JSON capped at 25 rows.
 """
 
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from fastmcp import FastMCP
 
 import queries
@@ -24,7 +24,7 @@ def get_finding_context(vuln_id: str) -> str:
     Retrieves full finding details for a vulnerability ID:
     CVSS base score, summary description, recommended fix version,
     the affected package name/version, and directly dependent services.
-    
+
     Args:
         vuln_id: The CVE or vulnerability identifier (e.g. 'CVE-2023-SLEEPER-01').
     """
@@ -38,7 +38,7 @@ def blast_radius(vuln_id: str) -> str:
     Traverses multi-hop dependency chains (DEPENDS_ON*1..6) from Services down to
     the vulnerable package. Returns all impacted services, dependency chains,
     and flags whether any impacted service is exposed to the internet.
-    
+
     Args:
         vuln_id: The CVE identifier to evaluate.
     """
@@ -52,7 +52,7 @@ def exploit_path(service: str) -> str:
     Finds shortest attack paths using FalkorDB's shortestPath algorithm:
     1. Checks if an internet-facing ingress service can reach this service via CALLS*0..5.
     2. Checks if this service can reach high- or medium-sensitivity DataStores via READS.
-    
+
     Args:
         service: Name of the microservice to analyze (e.g. 'checkout-service').
     """
@@ -65,7 +65,7 @@ def rank_critical_packages(limit: int = 25) -> str:
     """
     Runs FalkorDB's native PageRank algorithm over Package nodes connected by
     DEPENDS_ON relationships to find structurally central, high-impact packages.
-    
+
     Args:
         limit: Maximum number of packages to return (default 25, capped at 25).
     """
@@ -78,7 +78,7 @@ def find_owner(service: str) -> str:
     """
     Finds the engineering team that owns a service and lists all other
     microservices within their domain responsibility.
-    
+
     Args:
         service: Name of the microservice (e.g. 'auth-service').
     """
@@ -91,7 +91,7 @@ def similar_past_decisions(vuln_id: str) -> str:
     """
     Searches historical triage decisions for this vulnerability ID or for
     microservices impacted by this vulnerability to provide prior human context.
-    
+
     Args:
         vuln_id: Vulnerability identifier to check past triage history for.
     """
@@ -106,7 +106,7 @@ def compute_risk(vuln_id: str) -> str:
     derived from graph components:
       score = 10.0 * (cvss_norm * exposure * data_sensitivity * blast_radius_factor) * critical_path_multiplier
     Returns the final score, suggested verdict, and all individual component factors.
-    
+
     Args:
         vuln_id: Vulnerability identifier to calculate graph risk for.
     """
@@ -120,10 +120,10 @@ def propose_action(vuln_id: str, action_type: str, rationale: str, evidence: Lis
     STAGED WRITE ACTION (Human-in-the-Loop):
     Stages a proposed mitigation or ticket for human approval by writing a Decision node
     into FalkorDB with status 'pending'.
-    
+
     The AI Agent CAN NEVER execute tickets or changes directly.
     A human security lead must approve via POST /approve/{decision_id}.
-    
+
     Args:
         vuln_id: Vulnerability ID being triaged (e.g. 'CVE-2023-SLEEPER-01').
         action_type: Recommended action: 'patch_immediately', 'schedule_maintenance', or 'deprioritize'.

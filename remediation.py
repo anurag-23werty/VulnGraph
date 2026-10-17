@@ -30,10 +30,10 @@ def generate_remediation_plan(
 
     if ecosystem == "npm":
         upgrade_command = f"npm install {package_name}@{target_ver}"
-        audit_command = f"npm audit --json"
+        audit_command = "npm audit --json"
     else:
         upgrade_command = f"pip install --upgrade '{package_name}>={target_ver}'"
-        audit_command = f"pip-audit"
+        audit_command = "pip-audit"
 
     # Compensating controls if internet exposed
     compensating_controls = []

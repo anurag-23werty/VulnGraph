@@ -1,0 +1,81 @@
+name: VulnGraph Production CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-audit:
+    name: Security, Lint, FalkorDB Graph Tests & pip-audit
+    runs-on: ubuntu-latest
+
+    services:
+      falkordb:
+        image: falkordb/falkordb:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest flake8 pip-audit
+
+      - name: Lint Codebase (flake8)
+        run: |
+          flake8 --max-line-length=120 --ignore=E501,W503,E402 --exclude=.venv,__pycache__ .
+
+      - name: Run Schema Migrations
+        env:
+          FALKORDB_HOST: localhost
+          FALKORDB_PORT: 6379
+          FALKORDB_GRAPH: vulngraph
+        run: |
+          python migrate.py
+
+      - name: Ingest Planted Scenarios & OSV Graph
+        env:
+          FALKORDB_HOST: localhost
+          FALKORDB_PORT: 6379
+          FALKORDB_GRAPH: vulngraph
+        run: |
+          python ingest.py
+
+      - name: Run Complete Pytest Suite
+        env:
+          FALKORDB_HOST: localhost
+          FALKORDB_PORT: 6379
+          FALKORDB_GRAPH: vulngraph
+          GROQ_API_KEY: mock_key_for_testing
+          GROQ_MODEL: llama-3.3-70b-versatile
+        run: |
+          pytest tests/ -v -s
+
+      - name: Run Ground-Truth Benchmark & Stability Audit
+        env:
+          FALKORDB_HOST: localhost
+          FALKORDB_PORT: 6379
+          FALKORDB_GRAPH: vulngraph
+        run: |
+          python eval.py --all --markdown
+
+      - name: Security Vulnerability Scan (pip-audit)
+        run: |
+          pip-audit --desc on || true
