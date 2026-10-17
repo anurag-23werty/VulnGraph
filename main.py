@@ -14,7 +14,7 @@ from typing import List, Dict, Any, Optional
 import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,9 @@ from schema import get_graph
 from models import TriageResponse, TriageReport
 from agent import run_groq_agent_triage, run_deterministic_triage
 import queries
+from pdf_generator import generate_incident_pdf
+from langgraph_workflow import run_langgraph_triage
+from security_guardrails import run_agentic_security_audit
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -406,16 +409,100 @@ def list_tickets():
     return {"count": len(tickets), "tickets": list(reversed(tickets))}
 
 
+@app.get("/report/pdf/{vuln_id}")
+def export_incident_pdf(vuln_id: str):
+    """
+    Generates and downloads a comprehensive PDF incident dossier for the vulnerability.
+    """
+    ctx = queries.get_finding_context(vuln_id)
+    if not ctx.get("found"):
+        raise HTTPException(status_code=404, detail=f"Vulnerability '{vuln_id}' not found in FalkorDB.")
+
+    try:
+        pdf_bytes = generate_incident_pdf(vuln_id)
+        filename = f"VulnGraph_Incident_{vuln_id}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate incident PDF: {str(e)}")
+
+
+@app.post("/triage/langgraph/{vuln_id}")
+def run_langgraph_agent(vuln_id: str):
+    """
+    Executes the multi-agent LangGraph triage workflow:
+      Investigator -> Security Guardrail -> Remediation Specialist -> Human Approval Staging.
+    """
+    ctx = queries.get_finding_context(vuln_id)
+    if not ctx.get("found"):
+        raise HTTPException(status_code=404, detail=f"Vulnerability '{vuln_id}' not found in FalkorDB.")
+
+    try:
+        result = run_langgraph_triage(vuln_id)
+        return {
+            "status": "success",
+            "workflow": "LangGraph Multi-Agent StateGraph",
+            "vuln_id": vuln_id,
+            "lifecycle_state": result["status"],
+            "risk_score": result["risk_data"].get("graph_risk_score"),
+            "verdict": result["risk_data"].get("verdict"),
+            "audit": result["guardrail_audit"],
+            "remediation": result["remediation_plan"],
+            "staged_decision": result["decision_staged"],
+            "execution_trace": result["execution_trace"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LangGraph execution failed: {str(e)}")
+
+
+@app.get("/guardrails/{vuln_id}")
+def check_security_guardrails(vuln_id: str):
+    """
+    Executes production Agentic Security audit against FalkorDB and returns provenance hash.
+    """
+    ctx = queries.get_finding_context(vuln_id)
+    if not ctx.get("found"):
+        raise HTTPException(status_code=404, detail=f"Vulnerability '{vuln_id}' not found in FalkorDB.")
+
+    risk = queries.compute_risk(vuln_id)
+    br = queries.blast_radius(vuln_id)
+    services = br.get("impacted_services", [])
+    packages = [p.get("name") for p in ctx.get("packages", []) if isinstance(p, dict)]
+    evidence = risk.get("evidence_paths", [])
+
+    audit = run_agentic_security_audit(
+        vuln_id=vuln_id,
+        action_type=risk["verdict"],
+        risk_score=risk["graph_risk_score"],
+        services=services,
+        packages=packages,
+        evidence=evidence
+    )
+    return {
+        "vuln_id": vuln_id,
+        "audit": audit,
+        "graph_risk_score": risk["graph_risk_score"],
+        "action_type": risk["verdict"]
+    }
+
+
 # Mount static assets
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/")
 def serve_ui():
-    """Serves the single-page application UI."""
+    """Serves the single-page application UI with no-cache headers."""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        response = FileResponse(index_file)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     return {"message": "VulnGraph API active. UI index.html not found in static/."}
 
 

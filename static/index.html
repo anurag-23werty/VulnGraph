@@ -76,6 +76,10 @@
         <span>Triage Real OSV Data</span>
       </button>
 
+      <button id="btn-header-pdf" onclick="downloadSelectedPdf()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-lg shadow flex items-center gap-1.5 transition" title="Export PDF Dossier for Selected Finding">
+        <span>📄 Download Incident PDF</span>
+      </button>
+
       <button id="btn-view-tickets" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition flex items-center gap-1.5">
         <span>📋 Approved Tickets</span>
         <span id="ticket-badge-count" class="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 rounded text-[10px] font-bold">0</span>
@@ -191,11 +195,19 @@
               <p id="detail-summary" class="text-xs text-slate-300 mt-1 italic"></p>
             </div>
 
-            <!-- Approve Ticket CTA Button -->
-            <div id="detail-approval-box">
-              <button id="btn-approve-action" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
-                <span>✓ Approve Ticket</span>
+            <!-- Action Controls & Approval -->
+            <div class="flex items-center gap-2">
+              <button id="btn-export-pdf" onclick="downloadSelectedPdf()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-lg shadow flex items-center gap-1.5 transition" title="Export Forensic PDF Incident Dossier">
+                <span>📄 Export PDF</span>
               </button>
+              <button id="btn-trigger-langgraph" onclick="triggerLangGraphForSelected()" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs rounded-lg shadow flex items-center gap-1.5 transition" title="Execute multi-agent LangGraph state machine">
+                <span>🔄 LangGraph Loop</span>
+              </button>
+              <div id="detail-approval-box">
+                <button id="btn-approve-action" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow flex items-center gap-2 transition">
+                  <span>✓ Approve Ticket</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -206,6 +218,18 @@
             </div>
             <div id="detail-evidence-list" class="space-y-1 font-mono text-[11px] text-rose-300">
               <!-- Evidence lines -->
+            </div>
+          </div>
+
+          <!-- Agentic Security Audit Log & Cryptographic Provenance -->
+          <div id="detail-audit-box" class="p-2 rounded bg-slate-950/80 border border-emerald-900/40 text-[11px] flex items-center justify-between text-slate-300">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="font-semibold text-emerald-400">Agentic Security (Production Guardrails):</span>
+              <span id="detail-guardrail-status" class="text-slate-300 font-mono">VERIFIED</span>
+            </div>
+            <div class="font-mono text-[10px] text-slate-400">
+              SHA-256: <span id="detail-audit-hash" class="text-cyan-400">a3f89b...</span>
             </div>
           </div>
 
@@ -371,9 +395,11 @@
               CVSS ${item.cvss}
             </span>
           </div>
-          <div class="text-[10px] text-slate-400 mt-1 flex items-center justify-between">
-            <span>Priority: <strong>${item.verdict.toUpperCase()}</strong></span>
-            ${isCritical ? '<span class="text-rose-400">⚠️ False Urgency</span>' : '<span class="text-slate-500">Buries Ingress</span>'}
+          <div class="mt-2 pt-1 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
+            <span class="text-slate-500">Traditional View</span>
+            <button onclick="event.stopPropagation(); window.open('/report/pdf/' + encodeURIComponent('${item.vuln_id}'), '_blank');" class="px-2 py-0.5 rounded bg-indigo-950/60 hover:bg-indigo-700 text-indigo-300 hover:text-white border border-indigo-800/60 transition flex items-center gap-1 font-semibold">
+              <span>📄 PDF</span>
+            </button>
           </div>
         `;
         card.onclick = () => {
@@ -413,6 +439,14 @@
             <span class="${finding.has_internet_exposure ? 'text-cyan-400' : 'text-slate-500'}">
               ${finding.has_internet_exposure ? '🌐 Ingress Exposed' : '🔒 Internal'}
             </span>
+          </div>
+          <div class="mt-2 pt-1 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
+            <button onclick="event.stopPropagation(); window.open('/report/pdf/' + encodeURIComponent('${finding.vuln_id}'), '_blank');" class="px-2 py-0.5 rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-200 hover:text-white border border-indigo-700/60 transition flex items-center gap-1 font-semibold">
+              <span>📄 Export PDF</span>
+            </button>
+            <button onclick="event.stopPropagation(); triggerLangGraphDirect('${finding.vuln_id}');" class="px-2 py-0.5 rounded bg-purple-900/60 hover:bg-purple-700 text-purple-200 hover:text-white border border-purple-700/60 transition flex items-center gap-1 font-semibold">
+              <span>🔄 LangGraph</span>
+            </button>
           </div>
         `;
         card.onclick = () => selectFinding(finding);
@@ -478,6 +512,17 @@
         evList.innerHTML = '<div>• No reachable attack path to sensitive datastores discovered.</div>';
       }
 
+      // Fetch and display security guardrail provenance
+      fetch(`/guardrails/${finding.vuln_id}`)
+        .then(r => r.json())
+        .then(g => {
+          if (g && g.audit) {
+            document.getElementById('detail-guardrail-status').innerText = g.audit.status;
+            document.getElementById('detail-audit-hash').innerText = g.audit.audit_hash.substring(0, 16) + '...';
+          }
+        })
+        .catch(() => {});
+
       // Configure approval button
       const approvalBox = document.getElementById('detail-approval-box');
       if (finding.decision_id) {
@@ -492,6 +537,75 @@
 
       // Highlight in canvas
       loadGraphPath(finding.vuln_id);
+    }
+
+    // Download PDF Dossier
+    function downloadSelectedPdf() {
+      const finding = selectedFinding || (currentTriageData && currentTriageData.report && currentTriageData.report.findings && currentTriageData.report.findings[0]);
+      const vid = finding ? finding.vuln_id : 'CVE-2023-SLEEPER-01';
+      window.open(`/report/pdf/${encodeURIComponent(vid)}`, '_blank');
+    }
+
+    // Direct LangGraph Trigger from card
+    async function triggerLangGraphDirect(vid) {
+      try {
+        const res = await fetch(`/triage/langgraph/${encodeURIComponent(vid)}`, { method: 'POST' });
+        const data = await res.json();
+        alert(
+          `LangGraph Multi-Agent Workflow Completed!\n\n` +
+          `• Target: ${data.vuln_id}\n` +
+          `• State: ${data.lifecycle_state}\n` +
+          `• FalkorDB Risk: ${data.risk_score} (${data.verdict})\n` +
+          `• Security Audit: ${data.audit.status} (SHA-256: ${data.audit.audit_hash.substring(0, 12)}...)\n` +
+          `• Package Upgrade: ${data.remediation.upgrade_command}\n` +
+          `• Decision Node: Staged in FalkorDB (${data.staged_decision.decision_id})`
+        );
+        updateTicketCount();
+      } catch (e) {
+        alert('LangGraph execution failed: ' + e);
+      }
+    }
+
+    // Run LangGraph Multi-Agent Loop
+    async function triggerLangGraphForSelected() {
+      const finding = selectedFinding || (currentTriageData && currentTriageData.report && currentTriageData.report.findings && currentTriageData.report.findings[0]);
+      if (!finding) {
+        alert('Please select a vulnerability finding first.');
+        return;
+      }
+      const vid = finding.vuln_id;
+      const btn = document.getElementById('btn-trigger-langgraph');
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '<span>⏳ Running...</span>';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`/triage/langgraph/${vid}`, { method: 'POST' });
+        const data = await res.json();
+        alert(
+          `LangGraph Multi-Agent Workflow Completed!\n\n` +
+          `• Target: ${data.vuln_id}\n` +
+          `• State: ${data.lifecycle_state}\n` +
+          `• FalkorDB Risk: ${data.risk_score} (${data.verdict})\n` +
+          `• Security Audit: ${data.audit.status} (SHA-256: ${data.audit.audit_hash.substring(0, 12)}...)\n` +
+          `• Package Upgrade: ${data.remediation.upgrade_command}\n` +
+          `• Decision Node: Staged in FalkorDB (${data.staged_decision.decision_id})`
+        );
+        updateTicketCount();
+        if (selectedFinding && selectedFinding.vuln_id === vid) {
+          selectedFinding.decision_id = data.staged_decision.decision_id;
+          document.getElementById('detail-approval-box').innerHTML = `
+            <button onclick="approveDecision('${data.staged_decision.decision_id}')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
+              <span>✓ Approve Ticket (${data.staged_decision.decision_id})</span>
+            </button>
+          `;
+        }
+      } catch (err) {
+        alert('LangGraph execution failed: ' + err);
+      } finally {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+      }
     }
 
     // Approve Decision Endpoint

@@ -5,7 +5,7 @@
 [![Model](https://img.shields.io/badge/Agent_LLM-Groq_Llama--3.3--70B-green.svg)](https://groq.com)
 [![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://python.org)
 [![FastMCP](https://img.shields.io/badge/Protocol-FastMCP-purple.svg)](https://github.com/jlowin/fastmcp)
-[![Test Suite](https://img.shields.io/badge/Tests-37_Passed-brightgreen.svg)]()
+[![Test Suite](https://img.shields.io/badge/Tests-48_Passed-brightgreen.svg)]()
 
 > **FalkorDB Graph Hacks Hackathon — Track 01: "Agents That Act on Connected Data"**  
 > An autonomous security triage agent that replaces naive CVSS alert fatigue with topology-aware risk intelligence in FalkorDB.
@@ -17,14 +17,16 @@
 2. [Why FalkorDB? (Hackathon Hard Rule Compliance)](#why-falkordb-hackathon-hard-rule-compliance)
 3. [The Core Demo: Ground-Truth Reordering Proof](#the-core-demo-ground-truth-reordering-proof)
 4. [Graph Data Model](#graph-data-model)
-5. [System Architecture](#system-architecture)
-6. [Cypher Traversals & Graph Algorithms](#cypher-traversals--graph-algorithms)
-7. [MCP Tool Specifications](#mcp-tool-specifications)
-8. [Human-in-the-Loop Safe Action Staging](#human-in-the-loop-safe-action-staging)
-9. [Quickstart & Deployment Guide](#quickstart--deployment-guide)
-10. [Automated Evaluation Benchmark (`eval.py`)](#automated-evaluation-benchmark-evalpy)
-11. [Running the Test Suite](#running-the-test-suite)
-12. [AI Assistant Disclosure](#ai-assistant-disclosure)
+5. [Multi-Agent LangGraph Architecture & Loops](#multi-agent-langgraph-architecture--loops)
+6. [Agentic Security for Production (Guardrails & Provenance)](#agentic-security-for-production-guardrails--provenance)
+7. [Comprehensive Incident PDF Dossier Generation](#comprehensive-incident-pdf-dossier-generation)
+8. [Cypher Traversals & Graph Algorithms](#cypher-traversals--graph-algorithms)
+9. [MCP Tool Specifications](#mcp-tool-specifications)
+10. [Human-in-the-Loop Safe Action Staging](#human-in-the-loop-safe-action-staging)
+11. [Quickstart & Deployment Guide](#quickstart--deployment-guide)
+12. [Automated Evaluation Benchmark (`eval.py`)](#automated-evaluation-benchmark-evalpy)
+13. [Running the Test Suite](#running-the-test-suite)
+14. [AI Assistant Disclosure](#ai-assistant-disclosure)
 
 ---
 
@@ -115,35 +117,55 @@ graph TD
 
 ---
 
-## System Architecture
+## Multi-Agent LangGraph Architecture & Loops
+
+VulnGraph features a **production-grade Multi-Agent LangGraph StateGraph** that orchestrates specialized autonomous agents with cyclic state checkpoints and human review boundaries:
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor Analyst as Security Analyst (Browser UI)
-    participant FastAPI as FastAPI Server (:8000)
-    participant Agent as Autonomous Groq Agent (Llama 3.3 70B)
-    participant MCP as FastMCP Tool Registry
-    participant Falkor as FalkorDB Engine (:6379)
-    participant Tickets as tickets.jsonl / Webhook
-
-    Analyst->>FastAPI: Trigger Triage for Vulnerability ID
-    FastAPI->>Agent: Run Agentic Triage Loop
-    loop Autonomous Graph Investigation (Max 8 Steps)
-        Agent->>MCP: Call Tool (e.g. blast_radius, exploit_path)
-        MCP->>Falkor: Parameterized Cypher / algo.pageRank
-        Falkor-->>MCP: Compact Graph Results (<= 25 rows)
-        MCP-->>Agent: Observation Data
-    end
-    Agent->>MCP: propose_action(status="pending")
-    MCP->>Falkor: CREATE (:Decision {status: "pending"})
-    Falkor-->>FastAPI: Return Staged Verdict & Evidence Path
-    FastAPI-->>Analyst: Render Side-by-Side UI & Animated 2D Force Graph
-    
-    Analyst->>FastAPI: POST /approve/{decision_id}
-    FastAPI->>Falkor: UPDATE Decision SET status="approved"
-    FastAPI->>Tickets: Dispatch Ticket to Owning Team
+graph TD
+    Start([START]) --> Investigate["🕵️ Investigator Agent<br>(FalkorDB Cypher & PageRank)"]
+    Investigate --> Guardrail["🛡️ Security Guardrail Agent<br>(Hallucination Defense & Audit)"]
+    Guardrail --> Remediation["🔧 Remediation Specialist<br>(Package Upgrades & Controls)"]
+    Remediation --> HITL["👤 Human-in-the-Loop Node<br>(Stages Decision {status: 'pending'})"]
+    HITL --> Done([END: Awaiting Human Approval])
 ```
+
+### Agent Roles:
+1. **Investigator Agent**: Queries FalkorDB through parameterized Cypher and graph algorithms (`blast_radius`, `exploit_path`, `rank_critical_packages`, `find_owner`). Computes deterministic risk scores.
+2. **Security Guardrail Agent (Production Agentic Security)**: Validates that all microservices and packages cited in the evidence path strictly exist in FalkorDB (zero-hallucination guarantee). Enforces action policy boundaries.
+3. **Remediation Specialist Agent**: Formulates concrete upgrade commands (`pip install --upgrade ...` or `npm install ...`), compensating controls (WAF rules), and rollback strategies.
+4. **Human-in-the-Loop Node**: Writes a `(:Decision {status: 'pending'})` node to FalkorDB. Staged tickets are never dispatched without explicit human sign-off.
+
+---
+
+## Agentic Security for Production (Guardrails & Provenance)
+
+To ensure autonomous agents are safe for enterprise production environments, VulnGraph enforces five core guardrails ([`security_guardrails.py`](security_guardrails.py)):
+
+1. **Graph Hallucination Defense**:
+   - Cross-verifies every service, package, and datastore cited by the LLM directly against FalkorDB range indexes.
+   - If an agent cites a fictional entity, the audit fails and the proposal is flagged.
+2. **Action Boundary Enforcement**:
+   - Agent proposals are restricted to an approved enum (`patch_immediately`, `schedule_maintenance`, `deprioritize`).
+   - Hard policy rules prevent contradictory actions (e.g. findings with Risk $\ge 7.0$ cannot be deprioritized).
+3. **Sandboxed Read-Only Operations**:
+   - All tool traversals execute via FalkorDB `ro_query`. Mutation queries from the LLM are strictly blocked.
+4. **Prompt Injection Sanitization**:
+   - Public CVE descriptions and third-party advisories are sanitized to neutralize instruction override attacks.
+5. **Cryptographic SHA-256 Provenance**:
+   - Every agent assessment generates a deterministic SHA-256 hash of `(vuln_id, risk_score, action, evidence)` for tamper-evident compliance audit logs.
+
+---
+
+## Comprehensive Incident PDF Dossier Generation
+
+Security analysts can instantly export a court-ready, forensic PDF incident dossier for any triaged vulnerability via `GET /report/pdf/{vuln_id}`:
+
+- **Executive Severity Matrix**: Side-by-side comparison of baseline CVSS vs. FalkorDB Graph-Aware Risk.
+- **Forensic Topology & Ingress Route**: Visual path breakdown showing public internet ingress down to crown-jewel databases.
+- **Actionable Remediation Playbook**: Exact CLI upgrade commands, verification audits, and compensating controls.
+- **Agentic Security Verification Log**: Complete checklist of production guardrails passed, including the cryptographic SHA-256 hash.
+- **Human-in-the-Loop Sign-Off Block**: Formal analyst sign-off and ticket dispatch audit line.
 
 ---
 

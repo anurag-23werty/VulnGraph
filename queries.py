@@ -219,7 +219,7 @@ def similar_past_decisions(vuln_id: str) -> List[Dict[str, Any]]:
            d.rationale AS rationale,
            d.ts AS timestamp,
            s.name AS service
-    ORDER BY d.ts DESC
+    ORDER BY CASE WHEN d.status = 'approved' THEN 1 ELSE 2 END ASC, d.ts DESC
     LIMIT 25
     """
     res_direct = graph.ro_query(cypher_direct, {"vuln_id": vuln_id})
