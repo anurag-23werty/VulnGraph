@@ -90,6 +90,30 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
     );
   }, [finding, vulnId, graphQuery.data, traceQuery.data]);
 
+  // Derive attack path sequence from highlighted nodes and edges
+  const attackPathSequence = useMemo(() => {
+    if (!graphQuery.data?.nodes) return null;
+    const { nodes } = graphQuery.data;
+    const highlightedNodes = nodes.filter((n) => n.highlight);
+
+    if (highlightedNodes.length === 0) return null;
+
+    const vulnNode = highlightedNodes.find((n) => n.label === 'Vuln');
+    const pkgNode = highlightedNodes.find((n) => n.label === 'Package');
+    const ingressService = highlightedNodes.find((n) => n.label === 'Service' && n.internet_facing);
+    const internalServices = highlightedNodes.filter((n) => n.label === 'Service' && !n.internet_facing);
+    const dataStores = highlightedNodes.filter((n) => n.label === 'DataStore');
+
+    return {
+      vuln: vulnNode?.name || vulnId,
+      package: pkgNode?.name || finding?.package,
+      ingress: ingressService?.name,
+      internalServices: internalServices.map((s) => s.name),
+      dataStores: dataStores.map((d) => ({ name: d.name, sensitivity: d.sensitivity })),
+      isIsolated: !ingressService && dataStores.length === 0,
+    };
+  }, [graphQuery.data, vulnId, finding]);
+
   // Copy handler with visual feedback
   const handleCopy = (text: string, tabKey: string) => {
     navigator.clipboard.writeText(text);
@@ -100,7 +124,16 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
   return (
     <section id="evidence" style={{ marginBottom: 'var(--space-16)' }}>
       {/* Section Header */}
-      <div style={{ marginBottom: 'var(--space-6)' }}>
+      <div
+        style={{
+          marginBottom: 'var(--space-6)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 'var(--space-4)',
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-3)' }}>
           <h2 style={{ fontSize: 'var(--text-title)', fontWeight: 500, letterSpacing: '-0.01em' }}>
             Evidence & Attack Path
@@ -109,19 +142,160 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
             Selected finding: <code style={{ color: 'var(--color-ink)' }}>{vulnId}</code>
           </span>
         </div>
+
+        {/* 1-Click Forensic Incident Dossier Export (PDF) */}
+        <a
+          href={`/report/pdf/${encodeURIComponent(vulnId)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          download={`VulnGraph_Incident_${vulnId}.pdf`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+            fontSize: 'var(--text-small)',
+            padding: '7px 14px',
+            backgroundColor: 'var(--color-paper-elevated)',
+            color: 'var(--color-ink)',
+            border: '1px solid var(--color-hairline)',
+            borderRadius: 'var(--radius-md)',
+            textDecoration: 'none',
+            fontWeight: 500,
+            cursor: 'pointer',
+            transition: 'border-color 0.15s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-ink)')}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-hairline)')}
+        >
+          <span>Export Incident Dossier (PDF)</span>
+          <span className="mono" style={{ fontSize: 'var(--text-micro)' }}>↗</span>
+        </a>
       </div>
 
-      {/* Two-Pane Evidence Card */}
+      {/* Two-Pane Evidence Card with Attack Chain Banner */}
       <div
         style={{
           border: '1px solid var(--color-hairline)',
           borderRadius: 'var(--radius-lg)',
           backgroundColor: 'var(--color-paper-elevated)',
-          display: 'grid',
-          gridTemplateColumns: 'minmax(320px, 1.15fr) minmax(320px, 1fr)',
           overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
+        {/* Attack Path Breadcrumb Strip */}
+        <div
+          style={{
+            padding: 'var(--space-3) var(--space-4)',
+            backgroundColor: 'var(--color-paper)',
+            borderBottom: '1px solid var(--color-hairline)',
+            fontSize: 'var(--text-small)',
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 'var(--space-2)',
+          }}
+        >
+          <span
+            className="mono"
+            style={{
+              fontSize: 'var(--text-micro)',
+              fontWeight: 600,
+              color: 'var(--color-muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              marginRight: 'var(--space-1)',
+            }}
+          >
+            Topology Chain:
+          </span>
+
+          {attackPathSequence && !attackPathSequence.isIsolated ? (
+            <>
+              {attackPathSequence.ingress && (
+                <>
+                  <span
+                    className="mono"
+                    style={{
+                      fontSize: 'var(--text-micro)',
+                      padding: '2px 8px',
+                      backgroundColor: 'rgba(6, 182, 212, 0.12)',
+                      color: '#0891b2',
+                      border: '1px solid rgba(6, 182, 212, 0.25)',
+                      borderRadius: 'var(--radius-sm)',
+                      fontWeight: 500,
+                    }}
+                  >
+                    Ingress: {attackPathSequence.ingress}
+                  </span>
+                  <span style={{ color: 'var(--color-muted)', fontSize: 'var(--text-micro)' }}>──CALLS──▶</span>
+                </>
+              )}
+
+              {attackPathSequence.internalServices.map((s) => (
+                <React.Fragment key={s}>
+                  <span
+                    className="mono"
+                    style={{
+                      fontSize: 'var(--text-micro)',
+                      padding: '2px 8px',
+                      backgroundColor: 'var(--color-paper-subtle)',
+                      border: '1px solid var(--color-hairline)',
+                      borderRadius: 'var(--radius-sm)',
+                    }}
+                  >
+                    Service: {s}
+                  </span>
+                  <span style={{ color: 'var(--color-muted)', fontSize: 'var(--text-micro)' }}>──READS──▶</span>
+                </React.Fragment>
+              ))}
+
+              {attackPathSequence.dataStores.map((ds) => (
+                <span
+                  key={ds.name}
+                  className="mono"
+                  style={{
+                    fontSize: 'var(--text-micro)',
+                    padding: '2px 8px',
+                    backgroundColor:
+                      ds.sensitivity === 'high' ? 'rgba(179, 38, 30, 0.12)' : 'rgba(154, 103, 0, 0.12)',
+                    color: ds.sensitivity === 'high' ? 'var(--color-p1)' : 'var(--color-p2)',
+                    border: `1px solid ${ds.sensitivity === 'high' ? 'rgba(179, 38, 30, 0.25)' : 'rgba(154, 103, 0, 0.25)'}`,
+                    borderRadius: 'var(--radius-sm)',
+                    fontWeight: 600,
+                  }}
+                >
+                  Crown Jewel: {ds.name} ({ds.sensitivity || 'crown jewel'})
+                </span>
+              ))}
+
+              {attackPathSequence.package && (
+                <span
+                  style={{
+                    marginLeft: 'auto',
+                    fontSize: 'var(--text-micro)',
+                    color: 'var(--color-muted)',
+                  }}
+                >
+                  exploits package <code style={{ color: 'var(--color-ink)' }}>{attackPathSequence.package}</code>
+                </span>
+              )}
+            </>
+          ) : (
+            <span style={{ fontSize: 'var(--text-micro)', color: 'var(--color-muted)' }}>
+              Non-exploitable decoy: isolated internal service with zero ingress paths or crown jewel reachability in FalkorDB.
+            </span>
+          )}
+        </div>
+
+        {/* Inner Two Columns */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(320px, 1.15fr) minmax(320px, 1fr)',
+            overflow: 'hidden',
+          }}
+        >
         {/* LEFT PANE: Interactive Force Graph */}
         <div
           ref={containerRef}
@@ -489,6 +663,7 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
           </div>
         </div>
       </div>
-    </section>
-  );
+    </div>
+  </section>
+);
 };
