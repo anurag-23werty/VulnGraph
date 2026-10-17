@@ -6,9 +6,11 @@
 [![LangGraph](https://img.shields.io/badge/Orchestrator-LangGraph-blue.svg)](https://langchain-ai.github.io/langgraph/)
 [![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://python.org)
 [![FastMCP](https://img.shields.io/badge/Protocol-FastMCP-purple.svg)](https://github.com/jlowin/fastmcp)
-[![Test Suite](https://img.shields.io/badge/Tests-56_Passed-brightgreen.svg)]()
+[![Test Suite](https://img.shields.io/badge/Tests-61_Passed-brightgreen.svg)]()
 [![Production Ready](https://img.shields.io/badge/Security-Production_Hardened-emerald.svg)]()
+[![Live Demo](https://img.shields.io/badge/Live_Demo-vulngraph--oit9.onrender.com-00a86b?style=for-the-badge&logo=render&logoColor=white)](https://vulngraph-oit9.onrender.com)
 
+> 🌐 **Live Web Application**: **[https://vulngraph-oit9.onrender.com](https://vulngraph-oit9.onrender.com)**  
 > **FalkorDB Graph Hacks Hackathon — Track 01: "Agents That Act on Connected Data"**  
 > An autonomous security triage agent that replaces naive CVSS alert fatigue with topology-aware risk intelligence in FalkorDB.
 
@@ -19,16 +21,18 @@
 2. [Why FalkorDB? (Hackathon Hard Rule Compliance)](#why-falkordb-hackathon-hard-rule-compliance)
 3. [The Core Demo: Ground-Truth Reordering Proof](#the-core-demo-ground-truth-reordering-proof)
 4. [Empirical Validation: Ablation Study & Sensitivity Check](#empirical-validation-ablation-study--sensitivity-check)
-5. [Production Architecture: The Five Properties](#production-architecture-the-five-properties)
-6. [Graph Data Model & Relationships](#graph-data-model--relationships)
-7. [Multi-Agent LangGraph Architecture & Loops](#multi-agent-langgraph-architecture--loops)
-8. [Comprehensive Incident PDF Dossier Generation](#comprehensive-incident-pdf-dossier-generation)
-9. [Cypher Traversals & Graph Algorithms](#cypher-traversals--graph-algorithms)
-10. [MCP Tool Specifications](#mcp-tool-specifications)
-11. [Operations & Maintenance Guide (Backup, Restore, Migrations)](#operations--maintenance-guide)
-12. [Quickstart & Deployment Guide](#quickstart--deployment-guide)
-13. [Running the Test Suite](#running-the-test-suite)
-14. [AI Assistant Disclosure](#ai-assistant-disclosure)
+5. [Interactive dialkit-Inspired Web Application](#interactive-dialkit-inspired-web-application)
+6. [Production Architecture: The Five Properties](#production-architecture-the-five-properties)
+7. [Graph Data Model & Relationships](#graph-data-model--relationships)
+8. [Multi-Agent LangGraph Architecture & Loops](#multi-agent-langgraph-architecture--loops)
+9. [Comprehensive Incident PDF Dossier Generation](#comprehensive-incident-pdf-dossier-generation)
+10. [Cypher Traversals & Graph Algorithms](#cypher-traversals--graph-algorithms)
+11. [MCP Tool Specifications](#mcp-tool-specifications)
+12. [Operations & Maintenance Guide (Backup, Restore, Migrations)](#operations--maintenance-guide)
+13. [Repository Structure](#repository-structure)
+14. [Quickstart & Web Deployment Guide](#quickstart--web-deployment-guide)
+15. [Running the Test Suite](#running-the-test-suite)
+16. [AI Assistant Disclosure](#ai-assistant-disclosure)
 
 ---
 
@@ -110,17 +114,50 @@ Perturbs all 5 formula weight dimensions by **±10%** across 100 randomized Mont
 
 ---
 
+## Interactive dialkit-Inspired Web Application
+
+VulnGraph features an inline interactive web interface built with **Vite + React 18 + TypeScript strict** and styled using a clean, document-inspired design system (`paper` `#F7F6F3`, `ink` `#141413`, `hairline` `#E4E2DC`, semantic priorities). It replaces vanity dashboards with an inline operational tool:
+
+1. **What-If Live Re-weighting Controls (Hero Section)**:
+   - Interactive sliders for **Exposure Floor** (`0.05 – 0.50`), **Sensitivity Weight** (`0.5 – 3.0`), **Blast-Radius Weight** (`0.5 – 3.0`), and **Include CISA KEV** toggle.
+   - Client-side formula engine (`formula.ts`) recalculates rank scores in real time with 0.00 mathematical parity to FalkorDB ground truth.
+   - Includes a **Reset** button returning parameters to baseline `v1.2.0`.
+2. **Dual-Column Ranking with Spring Reordering**:
+   - Compares **"CVSS only"** naive prioritization against **"Graph-aware"** topology risk side-by-side.
+   - Animated layout reordering powered by `motion/react` with spring physics.
+   - Dynamic SVG cubic-bezier curves connecting matching vulnerabilities across columns.
+   - Real-time rank delta counters (`+3` priority escalation for sleepers, `-3` for decoys).
+3. **Evidence Panel & Attack Path Breadcrumb**:
+   - Interactive canvas force graph (`react-force-graph-2d`) highlighting active multi-hop paths to crown jewels while dimming unrelated nodes.
+   - **Topology Chain Breadcrumb**: Monospace linear hop sequence displayed above the graph:
+     ```
+     TOPOLOGY CHAIN: Ingress: checkout-service ──CALLS──▶ Service: payment-service ──READS──▶ Crown Jewel: payments-db (high)  exploits package urllib3
+     ```
+   - Segmented `Summary` | `Cypher` | `Raw JSON` inspectors with one-click copy actions.
+4. **1-Click Forensic Incident Dossier Export (PDF)**:
+   - Export button streaming an HMAC-SHA256 cryptographically signed ReportLab PDF incident report (`GET /report/pdf/{vuln_id}`) with graph topology, blast radius, owning teams, and CAS decision history.
+5. **MCP Tools Reference**:
+   - Interactive documentation for all 7 allowlisted read tools (`blast_radius`, `find_owner`, `exploit_path`, `crown_jewels_at_risk`, etc.).
+   - Dynamic parameter forms generated from MCP schemas with working defaults.
+   - Live query execution against FalkorDB via `POST /tools/{name}/run` with latency telemetry and JSON output viewer.
+6. **Human-in-the-Loop Triage Actions**:
+   - State-machine grouped decisions (`pending`, `dispatched`, `rejected`, `failed`).
+   - In-place CAS approval workflow with idempotency keys (`POST /approve/{id}`).
+   - Inline rejection workflow with mandatory feedback capture (`POST /reject/{id}`).
+
+---
+
 ## Production Architecture: The Five Properties
 
 VulnGraph is built from the ground up according to the **Five Production Properties for Security Agents**:
 
 | Property | Core Question | Production Implementation in VulnGraph |
 | :--- | :--- | :--- |
-| **Safe** | *Can the wrong person or input trigger an action?* | • Role-Based Access Control (`viewer`, `analyst`, `approver`, `admin`) via `auth.py`.<br>• Thread-safe sliding-window rate limiting on LLM endpoints via `rate_limiter.py`.<br>• Input caps (`max_length=25`, `Query(ge=1, le=200)`).<br>• Tool output wrapped in `<<<FALKORDB_GRAPH_DATA>>>` delimiters to neutralize prompt injection.<br>• Deep FalkorDB edge relationship verification (`security_guardrails.py`). |
+| **Safe** | *Can the wrong person or input trigger an action?* | • Role-Based Access Control (`viewer`, `analyst`, `approver`, `admin`) via `backend/auth.py`.<br>• Thread-safe sliding-window rate limiting on LLM endpoints via `backend/rate_limiter.py`.<br>• Input caps (`max_length=25`, `Query(ge=1, le=200)`).<br>• Tool output wrapped in `<<<FALKORDB_GRAPH_DATA>>>` delimiters to neutralize prompt injection.<br>• Deep FalkorDB edge relationship verification (`backend/security_guardrails.py`). |
 | **Correct** | *Does each action happen exactly once, and is the graph right?* | • Atomic Cypher CAS state machine: `pending -> approving -> dispatched / failed` and `pending -> rejected`.<br>• Deterministic idempotency key: `uuid5(NAMESPACE_DNS, decision_id)`.<br>• Feedback reason stored on rejected decisions.<br>• Anti-explosion two-stage `blast_radius` query (`DISTINCT` impacted services first, then single `shortestPath`).<br>• Range indexes on `Package.purl` and `Decision.id`. |
-| **Valid** | *Is the risk score actually good, and can you prove it?* | • Exposure floor: `effective_exposure = max(exposure, 0.15)` prevents unmapped services from zeroing score.<br>• Graph confidence score (0.0–1.0) derived alongside risk score.<br>• Formula versioning (`v1.2.0`) recorded on every `Decision` node.<br>• Empirical Ablation table & ±10% weight perturbation sensitivity check (`eval.py`). |
-| **Observable** | *Can you tell why something happened last Tuesday?* | • Structured JSON logging with `request_id` contextvar correlation across all middleware and queries (`logger.py`).<br>• Masked client errors returning `request_id` for zero secret leakage.<br>• Chained HMAC-SHA256 provenance signature on every triage finding. |
-| **Operable** | *Can someone deploy, back up, and upgrade it without you?* | • Multi-stage non-root `Dockerfile` (`appuser`, `reload=false`, healthcheck).<br>• Hardened `docker-compose.yml` (localhost-only ports, persistent volume, isolated network).<br>• Automated Cypher schema migrations (`migrate.py` + `migrations/`).<br>• Snapshot backup and restore utilities (`scripts/backup.py`, `scripts/restore.py`).<br>• Complete GitHub Actions CI workflow (`.github/workflows/ci.yml`). |
+| **Valid** | *Is the risk score actually good, and can you prove it?* | • Exposure floor: `effective_exposure = max(exposure, 0.15)` prevents unmapped services from zeroing score.<br>• Graph confidence score (0.0–1.0) derived alongside risk score.<br>• Formula versioning (`v1.2.0`) recorded on every `Decision` node.<br>• Empirical Ablation table & ±10% weight perturbation sensitivity check (`backend/eval.py`). |
+| **Observable** | *Can you tell why something happened last Tuesday?* | • Structured JSON logging with `request_id` contextvar correlation across all middleware and queries (`backend/logger.py`).<br>• Masked client errors returning `request_id` for zero secret leakage.<br>• Chained HMAC-SHA256 provenance signature on every triage finding. |
+| **Operable** | *Can someone deploy, back up, and upgrade it without you?* | • Multi-stage non-root `Dockerfile` with embedded FalkorDB support.<br>• Automated container startup script (`start.sh`) running migrations and graph seeding.<br>• Hardened `docker-compose.yml` (localhost-only ports, persistent volume, isolated network).<br>• Automated Cypher schema migrations (`backend/migrate.py` + `migrations/`).<br>• Snapshot backup and restore utilities (`scripts/backup.py`, `scripts/restore.py`).<br>• Complete GitHub Actions CI workflow (`.github/workflows/ci.yml`). |
 
 ---
 
@@ -284,94 +321,156 @@ VulnGraph/
 │   ├── pdf_generator.py # Incident report dossier generator
 │   ├── ingest.py       # Graph ingestion pipeline & scenario builder
 │   ├── migrate.py      # Cypher schema migrations runner
-│   └── eval.py         # Ground-truth ablation studies & sensitivity checks
+│   ├── eval.py         # Ground-truth ablation studies & sensitivity checks
+│   ├── auth.py         # Role-based access control (viewer, analyst, approver, admin)
+│   ├── logger.py       # Structured JSON logging & contextvars correlation
+│   ├── models.py       # Pydantic data schemas
+│   ├── rate_limiter.py # Sliding-window rate limiter
+│   ├── remediation.py  # Remediation plan generation
+│   └── schema.py       # FalkorDB connection & index initialization
 ├── frontend/           # Vite + React 18 + TypeScript strict UI (dialkit-inspired)
-├── static/             # Production static bundle served by FastAPI
-├── tests/              # 61 pytest integration & unit tests
+│   ├── src/components/ # WhatIfControls, RankingView, EvidencePanel, ToolsReference, ActionsPanel, MethodSection
+│   ├── src/api/        # Typed client with runtime Zod validation
+│   └── src/lib/        # Client-side what-if formula engine (formula.ts)
+├── static/             # Production static bundle served by FastAPI at "/"
+├── tests/              # 61 pytest backend integration & unit tests
 ├── docs/               # Technical documentation, Cypher reference & demo script
 ├── data/               # Software manifests, OSV cache, and eval results
 ├── reports/            # Generated incident PDF dossiers
-├── migrations/         # Cypher schema migration files
-├── prompts/            # Agent system prompt templates
+├── migrations/         # Cypher schema migration files (.cypher)
+├── prompts/            # Agent system prompt templates (system.md)
 ├── scripts/            # FalkorDB snapshot backup and disaster recovery tools
 ├── backups/            # Serialized graph snapshots
-├── Dockerfile          # Production multi-stage Docker build
-└── docker-compose.yml  # Container orchestration with FalkorDB
+├── start.sh            # Container boot script: auto-starts embedded FalkorDB, runs migrations, seeds graph
+├── render.yaml         # Render Blueprint specification for automated cloud deployment
+├── pytest.ini          # Pytest configuration with pythonpath = backend .
+├── Dockerfile          # Production multi-stage Docker build (embedded FalkorDB)
+└── docker-compose.yml  # Multi-container orchestration (FalkorDB + VulnGraph)
 ```
 
 ---
 
-## Quickstart & Deployment Guide
+## Quickstart & Web Deployment Guide
 
-### Prerequisites
-- Docker & Docker Compose
-- Python 3.11+
-- Free Groq API Key (from [console.groq.com](https://console.groq.com/keys))
+VulnGraph supports multiple deployment strategies depending on whether you need a permanent 24/7 cloud instance, an instant public demo link, or a local container.
 
-### Option A: Local Development Setup
+### Option A: 1-Click Free Cloud Deployment on Render (24/7 Hosting)
 
-1. **Clone repository**:
+The production Docker container is **fully self-contained**: it includes the embedded FalkorDB engine, runs database migrations, seeds the 277-node graph, and serves the UI and API automatically on startup.
+
+1. Fork or push this repository to your GitHub account (`https://github.com/anurag-23werty/VulnGraph.git`).
+2. Log in to the [Render Dashboard](https://dashboard.render.com/) and click **New +** ➔ **Web Service**.
+3. Select your repository:
+   - **Runtime**: `Docker`
+   - **Branch**: `main`
+   - **Root Directory**: *(leave blank)*
+   - **Instance Type**: `Free`
+4. **Environment Variables**: Add your Groq API key:
+   - `GROQ_API_KEY`: `gsk_...` (from [console.groq.com/keys](https://console.groq.com/keys))
+5. Click **Create Web Service**.
+   Render automatically builds the container, initializes FalkorDB, and gives you a 24/7 public URL (**[https://vulngraph-oit9.onrender.com](https://vulngraph-oit9.onrender.com)**).
+
+---
+
+### Option B: Instant 60-Second Public Link (Cloudflare Tunnel)
+
+If you are running VulnGraph on your local machine and want an immediate public HTTPS link to share with judges or team members without deploying to a cloud server:
+
+1. **Install Cloudflare Tunnel CLI**:
    ```bash
-   git clone https://github.com/anurag-23werty/VulnGraph.git
-   cd VulnGraph
+   brew install cloudflared    # macOS
    ```
-
-2. **Configure Environment**:
+2. **Start the local VulnGraph instance**:
    ```bash
-   cp .env.example .env
-   # Insert your GROQ_API_KEY into .env
+   PYTHONPATH=backend python backend/main.py
    ```
+3. **Launch the public tunnel**:
+   ```bash
+   cloudflared tunnel --url http://localhost:8000
+   ```
+   Cloudflare outputs an encrypted public HTTPS link: `https://<random-name>.trycloudflare.com`.
 
-3. **Start FalkorDB in Docker**:
+---
+
+### Option C: Hardened Multi-Stage Docker Compose
+
+To deploy VulnGraph with a separate, dedicated FalkorDB container and persistent storage:
+
+```bash
+# 1. Configure environment
+cp .env.example .env
+# Set GROQ_API_KEY in .env
+
+# 2. Build and launch services
+docker compose up -d --build
+```
+- Web Application & API: `http://localhost:8000`
+- FalkorDB RESP Engine: `127.0.0.1:6379` (bound strictly to loopback interface)
+
+---
+
+### Option D: Local Python Development Setup
+
+1. **Start FalkorDB**:
    ```bash
    docker compose up -d falkordb
    ```
-
-4. **Install Dependencies & Ingest Graph**:
+2. **Install Dependencies & Seed Graph**:
    ```bash
    pip install -r requirements.txt
    python backend/migrate.py
    python backend/ingest.py
    ```
-
-5. **Launch Application**:
+3. **Run Application**:
    ```bash
    python backend/main.py
    ```
-   *Open `http://localhost:8000` in your browser.*
-
----
-
-### Option B: Hardened Docker Compose Deployment
-
-```bash
-docker compose up --build
-```
-- Web Application & API: `http://localhost:8000`
-- FalkorDB Engine: `127.0.0.1:6379` (bound to localhost only)
+   Open `http://localhost:8000` in your browser.
 
 ---
 
 ## Running the Test Suite
 
-The automated test suite covers the entire production system across 56 test scenarios:
+The automated test suite covers the entire production system across **61 backend pytest scenarios** and **8 client-side Vitest tests**:
+
+### Backend Integration & Security Tests (61 Passed):
 
 ```bash
 pytest tests/ -v -s
 ```
 
 ```
-tests/test_agent.py ......................... [ 9%]
-tests/test_api.py ........................... [25%]
-tests/test_eval.py .......................... [34%]
-tests/test_guardrails.py .................... [45%]
-tests/test_langgraph.py ..................... [50%]
-tests/test_mcp.py ........................... [66%]
-tests/test_pdf.py ........................... [70%]
-tests/test_queries.py ....................... [91%]
-tests/test_safe.py .......................... [100%]
+tests/test_agent.py .....                                                [  8%]
+tests/test_api.py ..............                                         [ 31%]
+tests/test_eval.py .....                                                 [ 39%]
+tests/test_guardrails.py ......                                          [ 49%]
+tests/test_langgraph.py ..                                               [ 52%]
+tests/test_mcp.py ..........                                             [ 68%]
+tests/test_pdf.py ....                                                   [ 75%]
+tests/test_queries.py ............                                       [ 95%]
+tests/test_safe.py ...                                                   [100%]
 
-============================== 56 passed in 3.26s ==============================
+============================== 61 passed in 3.83s ==============================
+```
+
+### Frontend Formula Parity Unit Tests (8 Passed):
+
+```bash
+cd frontend && npm test -- --run
+```
+
+```
+ ✓ src/lib/formula.test.ts (8 tests)
+   ✓ Formula Parity with Server v1.2.0 > calculates exact parity for CVE-2023-SLEEPER-01
+   ✓ Formula Parity with Server v1.2.0 > calculates exact parity for CVE-2023-SLEEPER-02
+   ✓ Formula Parity with Server v1.2.0 > calculates exact parity for CVE-2023-SLEEPER-03
+   ✓ Formula Parity with Server v1.2.0 > calculates exact parity for CVE-2021-DECOY-01
+   ✓ Formula Parity with Server v1.2.0 > calculates exact parity for CVE-2022-DECOY-02
+   ✓ Formula Parity with Server v1.2.0 > calculates exact parity for CVE-2023-DECOY-03
+   ✓ Formula Parity with Server v1.2.0 > preserves sleeper > decoy separation
+   ✓ Formula Parity with Server v1.2.0 > reweights correctly under what-if exposure floor increase
+
+Test Files  1 passed (1) | Tests  8 passed (8)
 ```
 
 ---
