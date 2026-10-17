@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2022-25883",
+      "summary": "Regular expression denial of service in semver package",
+      "database_specific": {
+        "severity": "MODERATE",
+        "cvss_score": 5.3
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "semver",
+            "ecosystem": "npm"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "7.3.7"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

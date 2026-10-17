@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2023-SLEEPER-03",
+      "summary": "Prototype pollution vulnerability via defaultsDeep and zipObjectDeep in lodash",
+      "database_specific": {
+        "severity": "MODERATE",
+        "cvss_score": 6.1
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "lodash",
+            "ecosystem": "npm"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "4.17.21"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

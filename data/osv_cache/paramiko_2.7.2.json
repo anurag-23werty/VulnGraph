@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2021-DECOY-01",
+      "summary": "Critical authentication bypass in Paramiko server transport thread prior to handshake completion",
+      "database_specific": {
+        "severity": "CRITICAL",
+        "cvss_score": 9.8
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "paramiko",
+            "ecosystem": "PyPI"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "2.7.3"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

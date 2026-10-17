@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2023-SLEEPER-01",
+      "summary": "Authority parser backtracking vulnerability leading to connection bypass in urllib3",
+      "database_specific": {
+        "severity": "MODERATE",
+        "cvss_score": 5.3
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "urllib3",
+            "ecosystem": "PyPI"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "1.26.5"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

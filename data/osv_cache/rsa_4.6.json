@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2023-DECOY-03",
+      "summary": "Critical timing oracle flaw in RSA PKCS#1 v1.5 decryption allowing remote ciphertext recovery",
+      "database_specific": {
+        "severity": "CRITICAL",
+        "cvss_score": 9.6
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "rsa",
+            "ecosystem": "PyPI"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "4.7"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

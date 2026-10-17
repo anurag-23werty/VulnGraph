@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2022-DECOY-02",
+      "summary": "Critical buffer overflow and remote heap memory corruption in Pillow image parser",
+      "database_specific": {
+        "severity": "CRITICAL",
+        "cvss_score": 9.8
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "pillow",
+            "ecosystem": "PyPI"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "8.1.2"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2022-29217",
+      "summary": "Key confusion vulnerability in pyjwt leading to HMAC token signature bypass",
+      "database_specific": {
+        "severity": "HIGH",
+        "cvss_score": 7.4
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "pyjwt",
+            "ecosystem": "PyPI"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "2.4.0"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

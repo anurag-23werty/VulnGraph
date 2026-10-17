@@ -1,0 +1,29 @@
+{
+  "vulns": [
+    {
+      "id": "CVE-2020-7768",
+      "summary": "Regular expression denial of service ReDoS in nodemailer domain validator",
+      "database_specific": {
+        "severity": "MODERATE",
+        "cvss_score": 6.5
+      },
+      "affected": [
+        {
+          "package": {
+            "name": "nodemailer",
+            "ecosystem": "npm"
+          },
+          "ranges": [
+            {
+              "type": "ECOSYSTEM",
+              "events": [
+                {"introduced": "0"},
+                {"fixed": "6.4.16"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
