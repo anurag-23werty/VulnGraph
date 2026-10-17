@@ -4,125 +4,224 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VulnGraph | Agentic Connected-Data Vulnerability Triage</title>
+  
+  <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono (DialKit High-End Design) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Force Graph 2D CDN -->
   <script src="https://unpkg.com/force-graph"></script>
+
   <script>
     tailwind.config = {
       darkMode: 'class',
       theme: {
         extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
           colors: {
-            brand: {
-              50: '#f0fdf4',
-              500: '#10b981',
-              600: '#059669',
-              900: '#064e3b'
-            },
-            darkbg: '#0b0f19',
-            cardbg: '#111827',
-            panelbg: '#1e293b'
+            pitch: '#000000',
+            glass: {
+              surface: 'rgba(18, 18, 22, 0.45)',
+              border: 'rgba(255, 255, 255, 0.08)',
+              hover: 'rgba(26, 26, 34, 0.65)'
+            }
           }
         }
       }
     }
   </script>
+
   <style>
-    /* Custom scrollbars */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #0b0f19; }
-    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: #475569; }
-    .glow-red { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
-    .glow-green { box-shadow: 0 0 15px rgba(16, 185, 129, 0.4); }
+    /* Reset & Base Styles */
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      background-color: #000000;
+      color: #f1f5f9;
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    }
+
+    /* Custom Glass Scrollbars */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #000000; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
+
+    /* DialKit Frosted Glass Surfaces */
+    .glass-nav {
+      background: rgba(10, 10, 14, 0.65);
+      backdrop-filter: blur(20px) saturate(140%);
+      -webkit-backdrop-filter: blur(20px) saturate(140%);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .glass-surface {
+      background: rgba(14, 14, 18, 0.55);
+      backdrop-filter: blur(16px) saturate(130%);
+      -webkit-backdrop-filter: blur(16px) saturate(130%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .glass-card {
+      background: rgba(16, 16, 22, 0.5);
+      backdrop-filter: blur(14px) saturate(120%);
+      -webkit-backdrop-filter: blur(14px) saturate(120%);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .glass-card:hover {
+      background: rgba(24, 24, 34, 0.75);
+      border-color: rgba(255, 255, 255, 0.18);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+      transform: translateY(-1.5px);
+    }
+
+    /* DialKit Pill Button Treatments */
+    .glass-btn {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.4);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .glass-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.22);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 4px 14px rgba(0, 0, 0, 0.6);
+      transform: translateY(-0.5px);
+    }
+
+    .glass-btn:active {
+      transform: translateY(0.5px);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .glass-btn-primary {
+      background: linear-gradient(180deg, rgba(16, 185, 129, 0.85) 0%, rgba(5, 150, 105, 0.95) 100%);
+      border: 1px solid rgba(110, 231, 183, 0.4);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 4px 20px rgba(16, 185, 129, 0.35);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .glass-btn-primary:hover {
+      background: linear-gradient(180deg, rgba(52, 211, 153, 0.95) 0%, rgba(16, 185, 129, 1) 100%);
+      border-color: rgba(167, 243, 208, 0.6);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 6px 24px rgba(16, 185, 129, 0.55);
+      transform: translateY(-1px);
+    }
+
+    /* Glow Highlights */
+    .glow-dot-emerald { box-shadow: 0 0 10px rgba(16, 185, 129, 0.8); }
+    .glow-dot-cyan { box-shadow: 0 0 10px rgba(6, 182, 212, 0.8); }
+    .glow-dot-rose { box-shadow: 0 0 10px rgba(244, 63, 94, 0.8); }
   </style>
 </head>
-<body class="bg-darkbg text-slate-100 h-screen flex flex-col font-sans antialiased overflow-hidden">
 
-  <!-- Top Navigation Bar -->
-  <header class="h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur px-6 flex items-center justify-between z-20 shrink-0">
-    <div class="flex items-center space-x-3">
-      <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-lg">
+<body class="bg-black text-slate-100 h-screen flex flex-col font-sans antialiased overflow-hidden selection:bg-emerald-500/30 selection:text-emerald-200">
+
+  <!-- Ambient Glassmorphism Mesh Gradients (Pure Black Base with Soft Atmospheric Clouds) -->
+  <div class="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+    <div class="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-emerald-500/10 blur-[130px]"></div>
+    <div class="absolute top-1/4 -right-32 w-[30rem] h-[30rem] rounded-full bg-indigo-500/10 blur-[140px]"></div>
+    <div class="absolute -bottom-32 left-1/3 w-[32rem] h-[32rem] rounded-full bg-cyan-500/10 blur-[150px]"></div>
+  </div>
+
+  <!-- Top Navigation Bar (DialKit Floating Glass Command Bar) -->
+  <header class="glass-nav h-16 px-6 flex items-center justify-between z-20 shrink-0 relative">
+    <div class="flex items-center space-x-3.5">
+      <div class="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-base shadow-[0_0_20px_rgba(16,185,129,0.25)]">
         ⚡
       </div>
       <div>
-        <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-          VulnGraph
-          <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">FalkorDB Hackathon</span>
+        <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
+          <span>VulnGraph</span>
+          <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 font-mono font-semibold border border-emerald-500/30 shadow-[0_0_12px_rgba(16,185,129,0.2)]">FalkorDB Hackathon</span>
         </h1>
-        <p class="text-xs text-slate-400">Agentic Connected-Data Vulnerability Triage</p>
+        <p class="text-[11px] text-slate-400 font-medium">Agentic Connected-Data Vulnerability Triage</p>
       </div>
     </div>
 
     <!-- Live System Badges & Actions -->
-    <div class="flex items-center space-x-4">
-      <div class="flex items-center gap-3 text-xs">
-        <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          FalkorDB: <strong class="text-white">Active (6379)</strong>
+    <div class="flex items-center space-x-3">
+      <div class="flex items-center gap-2 text-xs">
+        <span class="flex items-center gap-1.5 px-3 py-1 rounded-full glass-surface text-slate-300 text-[11px]">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 glow-dot-emerald animate-pulse"></span>
+          <span>FalkorDB:</span> <strong class="text-white font-mono">6379</strong>
         </span>
-        <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
-          <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
-          Agent: <strong class="text-white">Groq AI (LPU)</strong>
+        <span class="flex items-center gap-1.5 px-3 py-1 rounded-full glass-surface text-slate-300 text-[11px]">
+          <span class="w-2 h-2 rounded-full bg-cyan-400 glow-dot-cyan"></span>
+          <span>Agent:</span> <strong class="text-white">Groq AI (LPU)</strong>
         </span>
       </div>
 
-      <button id="btn-triage-benchmark" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
+      <button id="btn-triage-benchmark" class="glass-btn-primary px-3.5 py-1.5 text-white font-semibold text-xs rounded-xl flex items-center gap-2 cursor-pointer">
         <span>⚡ Run Benchmark Triage</span>
       </button>
 
-      <button id="btn-triage-osv" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition">
+      <button id="btn-triage-osv" class="glass-btn px-3 py-1.5 text-slate-200 hover:text-white text-xs rounded-xl cursor-pointer">
         <span>Triage Real OSV Data</span>
       </button>
 
-      <button id="btn-header-pdf" onclick="downloadSelectedPdf()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-lg shadow flex items-center gap-1.5 transition" title="Export PDF Dossier for Selected Finding">
+      <button id="btn-header-pdf" onclick="downloadSelectedPdf()" class="glass-btn px-3 py-1.5 text-indigo-300 hover:text-white text-xs rounded-xl flex items-center gap-1.5 cursor-pointer" title="Export PDF Dossier for Selected Finding">
         <span>📄 Download Incident PDF</span>
       </button>
 
-      <button id="btn-view-tickets" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+      <button id="btn-view-tickets" class="glass-btn px-3 py-1.5 text-slate-200 hover:text-white text-xs rounded-xl flex items-center gap-1.5 cursor-pointer">
         <span>📋 Approved Tickets</span>
-        <span id="ticket-badge-count" class="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 rounded text-[10px] font-bold">0</span>
+        <span id="ticket-badge-count" class="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 rounded-full text-[10px] font-mono font-bold">0</span>
       </button>
     </div>
   </header>
 
   <!-- Main Grid Workspace -->
-  <div class="flex-1 grid grid-cols-12 min-h-0 overflow-hidden">
+  <div class="flex-1 grid grid-cols-12 min-h-0 overflow-hidden relative z-10">
 
     <!-- Column 1 & 2: Two Ranked Prioritization Lists (Width: 5 cols) -->
-    <div class="col-span-5 border-r border-slate-800 flex flex-col min-h-0 bg-slate-950/60 overflow-hidden">
+    <div class="col-span-5 border-r border-white/10 flex flex-col min-h-0 bg-black/40 backdrop-blur-2xl overflow-hidden relative">
       <!-- Top Subheader -->
-      <div class="p-3 border-b border-slate-800 bg-slate-900/40 grid grid-cols-2 gap-2 text-xs">
-        <div class="flex items-center gap-1.5 text-slate-400">
-          <span class="w-2.5 h-2.5 rounded bg-rose-500/40 border border-rose-500"></span>
-          <strong>Baseline (CVSS Only)</strong>
+      <div class="p-3 border-b border-white/10 bg-white/[0.02] backdrop-blur-md grid grid-cols-2 gap-2 text-xs">
+        <div class="flex items-center gap-2 text-slate-300">
+          <span class="w-2.5 h-2.5 rounded-full bg-rose-500/40 border border-rose-500 glow-dot-rose"></span>
+          <strong class="text-[11px] font-mono uppercase tracking-wider text-rose-300">Baseline (CVSS Only)</strong>
         </div>
-        <div class="flex items-center gap-1.5 text-emerald-400">
-          <span class="w-2.5 h-2.5 rounded bg-emerald-500/40 border border-emerald-500"></span>
-          <strong>VulnGraph (Graph-Aware)</strong>
+        <div class="flex items-center gap-2 text-emerald-300">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/40 border border-emerald-500 glow-dot-emerald"></span>
+          <strong class="text-[11px] font-mono uppercase tracking-wider text-emerald-300">VulnGraph (Graph-Aware)</strong>
         </div>
       </div>
 
       <!-- Comparison Lists Container -->
-      <div class="flex-1 grid grid-cols-2 divide-x divide-slate-800 overflow-y-auto p-3 gap-3">
+      <div class="flex-1 grid grid-cols-2 divide-x divide-white/10 overflow-y-auto p-3.5 gap-3.5">
 
         <!-- Column A: CVSS-Only (The Illusion) -->
         <div class="space-y-2.5" id="baseline-list">
-          <div class="text-[11px] text-slate-400 px-1 italic">
-            Sorted by raw CVSS score alone:
+          <div class="text-[10px] uppercase font-mono tracking-wider text-slate-400 px-1">
+            Raw CVSS Priority:
           </div>
-          <div id="baseline-items" class="space-y-2">
+          <div id="baseline-items" class="space-y-2.5">
             <!-- Dynamically populated -->
           </div>
         </div>
 
         <!-- Column B: Graph-Aware (The Reality) -->
-        <div class="space-y-2.5 pl-3" id="graph-list">
-          <div class="text-[11px] text-emerald-400/80 px-1 font-medium">
-            Reordered by Attack Path & Crown Jewels:
+        <div class="space-y-2.5 pl-3.5" id="graph-list">
+          <div class="text-[10px] uppercase font-mono tracking-wider text-emerald-400 px-1">
+            Attack Path & Crown Jewels:
           </div>
-          <div id="graph-items" class="space-y-2">
+          <div id="graph-items" class="space-y-2.5">
             <!-- Dynamically populated -->
           </div>
         </div>
@@ -130,108 +229,111 @@
       </div>
 
       <!-- Execution Status Bar -->
-      <div id="status-bar" class="p-2.5 border-t border-slate-800 bg-slate-900/60 text-xs text-slate-400 flex items-center justify-between">
-        <span id="status-msg">Click "Run Benchmark Triage" to begin graph-aware ranking.</span>
-        <span id="latency-msg" class="text-slate-500"></span>
+      <div id="status-bar" class="p-2.5 px-4 border-t border-white/10 bg-black/60 backdrop-blur-xl text-xs text-slate-400 flex items-center justify-between">
+        <span id="status-msg" class="truncate font-mono text-[11px] text-slate-300">Click "Run Benchmark Triage" to begin graph-aware ranking.</span>
+        <span id="latency-msg" class="text-emerald-400/90 font-mono text-[10px] shrink-0 ml-2"></span>
       </div>
     </div>
 
     <!-- Center/Right Canvas & Details (Width: 7 cols) -->
-    <div class="col-span-7 flex flex-col min-h-0 overflow-hidden bg-slate-950">
+    <div class="col-span-7 flex flex-col min-h-0 overflow-hidden bg-black/50 backdrop-blur-2xl relative">
 
       <!-- Interactive 2D Force-Graph Canvas -->
-      <div class="relative flex-1 min-h-0 bg-slate-950 overflow-hidden" id="graph-container">
+      <div class="relative flex-1 min-h-0 bg-black overflow-hidden" id="graph-container">
         <div id="force-graph-canvas" class="w-full h-full"></div>
 
-        <!-- Canvas Legend & Overlay -->
-        <div class="absolute top-4 left-4 p-3 rounded-lg bg-slate-900/85 border border-slate-800 text-xs backdrop-blur space-y-1.5 pointer-events-none z-10">
-          <div class="font-bold text-slate-200 text-[11px] uppercase tracking-wider mb-1">Graph Legend</div>
-          <div class="flex items-center gap-2 text-slate-300">
-            <span class="w-3 h-3 rounded-full bg-[#06b6d4]"></span> Internet Gateway (Ingress)
+        <!-- Canvas Legend & Overlay (DialKit Floating Glass Pill Box) -->
+        <div class="absolute top-4 left-4 p-3.5 rounded-2xl glass-surface text-xs space-y-2 pointer-events-none z-10 shadow-2xl">
+          <div class="font-bold text-slate-200 text-[10px] font-mono uppercase tracking-wider mb-1 flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Graph Legend
           </div>
-          <div class="flex items-center gap-2 text-slate-300">
-            <span class="w-3 h-3 rounded-full bg-[#10b981]"></span> Internal Microservice
+          <div class="flex items-center gap-2 text-slate-300 text-[11px]">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#06b6d4]"></span> Internet Gateway (Ingress)
           </div>
-          <div class="flex items-center gap-2 text-slate-300">
-            <span class="w-3 h-3 rounded-full bg-[#f59e0b]"></span> High-Sensitivity DataStore
+          <div class="flex items-center gap-2 text-slate-300 text-[11px]">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#10b981]"></span> Internal Microservice
           </div>
-          <div class="flex items-center gap-2 text-slate-300">
-            <span class="w-3 h-3 rounded-full bg-[#8b5cf6]"></span> Software Package
+          <div class="flex items-center gap-2 text-slate-300 text-[11px]">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#f59e0b]"></span> High-Sensitivity DataStore
           </div>
-          <div class="flex items-center gap-2 text-rose-400 font-semibold">
-            <span class="w-3 h-3 rounded-full bg-[#ef4444] animate-ping"></span> Active Attack Path
+          <div class="flex items-center gap-2 text-slate-300 text-[11px]">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#8b5cf6]"></span> Software Package
+          </div>
+          <div class="flex items-center gap-2 text-rose-400 font-semibold text-[11px]">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#ef4444] glow-dot-rose animate-ping"></span> Active Attack Path
           </div>
         </div>
 
         <!-- Zoom Controls -->
         <div class="absolute bottom-4 right-4 flex flex-col gap-1.5 z-10">
-          <button id="btn-zoom-fit" class="p-2 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs shadow" title="Reset View">
+          <button id="btn-zoom-fit" class="glass-btn px-3 py-1.5 rounded-xl text-slate-200 hover:text-white text-xs shadow-lg flex items-center gap-1.5 cursor-pointer" title="Reset View">
             🔍 Reset View
           </button>
         </div>
       </div>
 
-      <!-- Investigation & Human Approval Bottom Panel -->
-      <div id="detail-panel" class="h-80 flex-shrink-0 border-t-2 border-emerald-500/50 bg-slate-900/95 p-4 flex flex-col overflow-y-auto z-10 shadow-2xl">
-        <div id="detail-empty" class="h-full flex items-center justify-center text-slate-500 text-sm">
+      <!-- Investigation & Human Approval Bottom Panel (DialKit Frosted Dock) -->
+      <div id="detail-panel" class="h-80 flex-shrink-0 border-t border-white/10 bg-black/75 backdrop-blur-2xl p-4 flex flex-col overflow-y-auto z-10 shadow-[0_-15px_40px_rgba(0,0,0,0.85)]">
+        <div id="detail-empty" class="h-full flex items-center justify-center text-slate-500 text-sm font-medium">
           Select any finding from the lists above to inspect its attack path, evidence, and agent rationale.
         </div>
 
-        <div id="detail-content" class="hidden space-y-3">
+        <div id="detail-content" class="hidden space-y-3.5">
           <div class="flex items-start justify-between">
             <div>
               <div class="flex items-center gap-2.5 flex-wrap">
-                <h3 id="detail-vuln-id" class="text-base font-bold text-white">CVE-XXXX</h3>
-                <span id="detail-verdict-badge" class="px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider">PATCH_IMMEDIATELY</span>
-                <span id="detail-source-badge" class="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-xs font-semibold border border-blue-500/30">OSV.dev</span>
-                <span id="detail-exposure-badge" class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-xs border border-slate-700"></span>
-                <a id="detail-osv-link" href="#" target="_blank" class="text-cyan-400 hover:underline text-xs flex items-center gap-1">View on OSV.dev ↗</a>
+                <h3 id="detail-vuln-id" class="text-base font-bold text-white tracking-tight">CVE-XXXX</h3>
+                <span id="detail-verdict-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider">PATCH_IMMEDIATELY</span>
+                <span id="detail-source-badge" class="px-2.5 py-0.5 rounded-full bg-blue-500/15 text-blue-300 text-xs font-semibold border border-blue-500/30">OSV.dev</span>
+                <span id="detail-exposure-badge" class="px-2.5 py-0.5 rounded-full glass-surface text-slate-300 text-xs"></span>
+                <a id="detail-osv-link" href="#" target="_blank" class="text-cyan-400 hover:text-cyan-300 hover:underline text-xs flex items-center gap-1 font-mono">View on OSV.dev ↗</a>
               </div>
               <div class="flex items-center gap-2 text-xs text-slate-400 mt-1">
-                <span>Package: <strong id="detail-pkg-name" class="text-purple-300"></strong></span>
-                <span>•</span>
-                <span>Fix Version: <strong id="detail-fix-ver" class="text-emerald-400"></strong></span>
+                <span>Package: <strong id="detail-pkg-name" class="text-purple-300 font-mono"></strong></span>
+                <span class="text-slate-600">•</span>
+                <span>Fix Version: <strong id="detail-fix-ver" class="text-emerald-400 font-mono"></strong></span>
               </div>
               <p id="detail-summary" class="text-xs text-slate-300 mt-1 italic"></p>
             </div>
 
             <!-- Action Controls -->
-            <div class="flex items-center gap-2">
-              <button id="btn-export-pdf" onclick="downloadSelectedPdf()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-lg shadow flex items-center gap-1.5 transition" title="Export Forensic PDF Incident Dossier">
+            <div class="flex items-center gap-2 shrink-0">
+              <button id="btn-export-pdf" onclick="downloadSelectedPdf()" class="glass-btn px-3 py-1.5 text-indigo-300 hover:text-white font-medium text-xs rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md" title="Export Forensic PDF Incident Dossier">
                 <span>📄 Export PDF</span>
               </button>
-              <button id="btn-trigger-langgraph" onclick="triggerLangGraphForSelected()" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs rounded-lg shadow flex items-center gap-1.5 transition" title="Execute multi-agent LangGraph state machine">
+              <button id="btn-trigger-langgraph" onclick="triggerLangGraphForSelected()" class="glass-btn px-3 py-1.5 text-purple-300 hover:text-white font-medium text-xs rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md" title="Execute multi-agent LangGraph state machine">
                 <span>🔄 LangGraph Loop</span>
               </button>
             </div>
           </div>
 
-          <!-- Prominent Human-in-the-Loop Decision Gate Banner -->
-          <div id="hil-banner" class="p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/50 flex items-center justify-between shadow-inner">
+          <!-- Prominent Human-in-the-Loop Decision Gate Banner (DialKit Glass Pill treatment) -->
+          <div id="hil-banner" class="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-black/60 to-emerald-950/20 backdrop-blur-xl border border-emerald-500/30 flex items-center justify-between shadow-[0_4px_24px_rgba(16,185,129,0.12),inset_0_1px_0_rgba(255,255,255,0.1)]">
             <div class="flex items-center gap-3">
-              <span class="w-3 h-3 rounded-full bg-emerald-400 animate-ping"></span>
+              <span class="w-3 h-3 rounded-full bg-emerald-400 glow-dot-emerald animate-ping"></span>
               <div>
                 <div class="text-xs font-bold text-emerald-300 flex items-center gap-2">
                   <span>🛡️ Human-in-the-Loop Decision Gate</span>
-                  <span id="hil-state-badge" class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-mono font-bold">STATUS: PENDING APPROVAL</span>
+                  <span id="hil-state-badge" class="px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-mono font-bold tracking-wide">STATUS: PENDING APPROVAL</span>
                 </div>
                 <div class="text-[11px] text-slate-300 mt-0.5">
                   Staged Mitigation: <span id="hil-action-text" class="font-mono text-cyan-300 font-semibold">patch_immediately</span>
-                  <span class="text-slate-500 mx-1.5">•</span>
-                  Decision ID: <code id="hil-decision-id" class="text-purple-300 font-bold">dec-xxxx</code>
+                  <span class="text-slate-600 mx-1.5">•</span>
+                  Decision ID: <code id="hil-decision-id" class="text-purple-300 font-mono font-bold">dec-xxxx</code>
                 </div>
               </div>
             </div>
             <div id="detail-approval-box" class="flex items-center gap-2">
-              <button id="btn-approve-action" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
+              <button id="btn-approve-action" class="glass-btn-primary px-4 py-1.5 text-white font-bold text-xs rounded-xl shadow-lg flex items-center gap-2 cursor-pointer">
                 <span>✓ Approve & Dispatch Ticket</span>
               </button>
             </div>
           </div>
 
           <!-- Evidence Vector Flow -->
-          <div class="p-2.5 rounded bg-slate-950/70 border border-slate-800 text-xs">
-            <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+          <div class="p-3 rounded-xl bg-black/50 backdrop-blur-md border border-white/5 text-xs shadow-inner">
+            <div class="text-[10px] font-mono font-semibold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
               <span>🎯 Traversed Attack Path & Crown Jewels:</span>
             </div>
             <div id="detail-evidence-list" class="space-y-1 font-mono text-[11px] text-rose-300">
@@ -240,23 +342,23 @@
           </div>
 
           <!-- Agentic Security Audit Log & Cryptographic Provenance -->
-          <div id="detail-audit-box" class="p-2 rounded bg-slate-950/80 border border-emerald-900/40 text-[11px] flex items-center justify-between text-slate-300">
+          <div id="detail-audit-box" class="p-2.5 rounded-xl bg-emerald-950/20 backdrop-blur-md border border-emerald-500/20 text-[11px] flex items-center justify-between text-slate-300">
             <div class="flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="w-2 h-2 rounded-full bg-emerald-400 glow-dot-emerald animate-pulse"></span>
               <span class="font-semibold text-emerald-400">Agentic Security (Production Guardrails):</span>
               <span id="detail-guardrail-status" class="text-slate-300 font-mono">VERIFIED</span>
             </div>
             <div class="font-mono text-[10px] text-slate-400">
-              SHA-256: <span id="detail-audit-hash" class="text-cyan-400">a3f89b...</span>
+              SHA-256: <span id="detail-audit-hash" class="text-cyan-400 font-mono">a3f89b...</span>
             </div>
           </div>
 
           <!-- Agent Rationale & Trace Toggle -->
-          <div class="flex items-center justify-between text-xs pt-1">
+          <div class="flex items-center justify-between text-xs pt-0.5">
             <div class="text-slate-300 flex-1 pr-4">
               <strong>Agent Reasoning:</strong> <span id="detail-rationale" class="text-slate-400"></span>
             </div>
-            <button id="btn-toggle-trace" class="text-emerald-400 hover:underline text-xs shrink-0">
+            <button id="btn-toggle-trace" class="text-emerald-400 hover:text-emerald-300 hover:underline text-xs shrink-0 font-medium cursor-pointer">
               Show Agent Tool Trace (⚡)
             </button>
           </div>
@@ -267,15 +369,15 @@
 
   </div>
 
-  <!-- Execution Trace Modal / Drawer -->
-  <div id="trace-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-6">
-    <div class="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
-      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+  <!-- Execution Trace Modal / Drawer (DialKit Frosted Glass Modal) -->
+  <div id="trace-modal" class="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 hidden flex items-center justify-center p-6">
+    <div class="bg-black/80 backdrop-blur-2xl border border-white/15 rounded-3xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.15)] overflow-hidden">
+      <div class="p-4 border-b border-white/10 flex items-center justify-between">
         <h3 class="font-bold text-white text-sm flex items-center gap-2">
           <span>⚡ Agent Execution Trace</span>
-          <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">FastMCP Tools</span>
+          <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono">FastMCP Tools</span>
         </h3>
-        <button id="btn-close-trace" class="text-slate-400 hover:text-white text-lg font-bold">&times;</button>
+        <button id="btn-close-trace" class="glass-btn w-8 h-8 rounded-full text-slate-400 hover:text-white flex items-center justify-center font-bold cursor-pointer">&times;</button>
       </div>
       <div id="trace-steps-container" class="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-xs">
         <!-- Trace steps dynamically inserted -->
@@ -283,14 +385,15 @@
     </div>
   </div>
 
-  <!-- Approved Tickets Modal -->
-  <div id="tickets-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-6">
-    <div class="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl">
-      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+  <!-- Approved Tickets Modal (DialKit Frosted Glass Modal) -->
+  <div id="tickets-modal" class="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 hidden flex items-center justify-center p-6">
+    <div class="bg-black/80 backdrop-blur-2xl border border-white/15 rounded-3xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.15)] overflow-hidden">
+      <div class="p-4 border-b border-white/10 flex items-center justify-between">
         <h3 class="font-bold text-white text-sm flex items-center gap-2">
-          <span>📋 Approved Security Tickets (tickets.jsonl)</span>
+          <span>📋 Approved Security Tickets</span>
+          <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-white/5 text-slate-400 font-mono">tickets.jsonl</span>
         </h3>
-        <button id="btn-close-tickets" class="text-slate-400 hover:text-white text-lg font-bold">&times;</button>
+        <button id="btn-close-tickets" class="glass-btn w-8 h-8 rounded-full text-slate-400 hover:text-white flex items-center justify-center font-bold cursor-pointer">&times;</button>
       </div>
       <div id="tickets-list-container" class="flex-1 overflow-y-auto p-4 space-y-2.5 text-xs">
         <!-- Tickets dynamically inserted -->
@@ -308,12 +411,12 @@
     function initForceGraph() {
       const container = document.getElementById('force-graph-canvas');
       graphInstance = ForceGraph()(container)
-        .backgroundColor('#0b0f19')
+        .backgroundColor('#000000')
         .nodeId('id')
         .nodeLabel(node => `<strong>${node.name}</strong><br/>Type: ${node.label}<br/>${node.sensitivity ? 'Sensitivity: ' + node.sensitivity : ''}${node.cvss ? 'CVSS: ' + node.cvss : ''}`)
         .nodeVal(node => node.val || 8)
         .nodeColor(node => node.highlight ? '#ef4444' : node.color)
-        .linkColor(link => link.highlight ? '#ef4444' : '#334155')
+        .linkColor(link => link.highlight ? '#ef4444' : '#27272a')
         .linkWidth(link => link.highlight ? 3.5 : 1)
         .linkDirectionalParticles(link => link.highlight ? 4 : 0)
         .linkDirectionalParticleWidth(3)
@@ -324,7 +427,7 @@
           if (node.highlight) {
             ctx.beginPath();
             ctx.arc(node.x, node.y, r + 4, 0, 2 * Math.PI, false);
-            ctx.fillStyle = 'rgba(239, 68, 68, 0.4)';
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.45)';
             ctx.fill();
           }
           // Main node circle
@@ -332,7 +435,7 @@
           ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
           ctx.fillStyle = node.highlight ? '#ef4444' : node.color;
           ctx.fill();
-          ctx.strokeStyle = node.highlight ? '#fee2e2' : 'rgba(255,255,255,0.2)';
+          ctx.strokeStyle = node.highlight ? '#fee2e2' : 'rgba(255,255,255,0.25)';
           ctx.lineWidth = node.highlight ? 2 : 1;
           ctx.stroke();
 
@@ -400,24 +503,30 @@
       baselineContainer.innerHTML = '';
       graphContainer.innerHTML = '';
 
-      // Baseline Cards
+      // Baseline Cards (DialKit Glass Card)
       if (data.baseline_ranking) {
         data.baseline_ranking.forEach((item, idx) => {
           const card = document.createElement('div');
           const isCritical = item.cvss >= 9.0;
-          card.className = `p-2.5 rounded-lg border transition cursor-pointer ${
-            isCritical ? 'bg-rose-950/20 border-rose-900/40 hover:border-rose-700' : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+          card.className = `p-3 rounded-xl border transition-all duration-200 cursor-pointer ${
+            isCritical
+              ? 'glass-card border-rose-500/25 hover:border-rose-500/50 bg-gradient-to-br from-rose-950/20 via-black/40 to-black/60 shadow-[0_4px_20px_rgba(244,63,94,0.12)]'
+              : 'glass-card border-white/8 hover:border-white/20 bg-black/40'
           }`;
           card.innerHTML = `
             <div class="flex items-center justify-between text-xs">
               <span class="font-bold text-slate-200">#${idx + 1} ${item.vuln_id}</span>
-              <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isCritical ? 'bg-rose-500/20 text-rose-400' : 'bg-amber-500/20 text-amber-400'}">
+              <span class="px-2 py-0.5 rounded-full font-mono text-[10px] font-bold ${
+                isCritical
+                  ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                  : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+              }">
                 CVSS ${item.cvss}
               </span>
             </div>
-            <div class="mt-2 pt-1 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
-              <span class="text-slate-500">Traditional View</span>
-              <button onclick="event.stopPropagation(); window.open('/report/pdf/' + encodeURIComponent('${item.vuln_id}'), '_blank');" class="px-2 py-0.5 rounded bg-indigo-950/60 hover:bg-indigo-700 text-indigo-300 hover:text-white border border-indigo-800/60 transition flex items-center gap-1 font-semibold">
+            <div class="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[10px]">
+              <span class="text-slate-500 font-mono">Traditional View</span>
+              <button onclick="event.stopPropagation(); window.open('/report/pdf/' + encodeURIComponent('${item.vuln_id}'), '_blank');" class="glass-btn px-2.5 py-0.5 rounded-lg text-indigo-300 hover:text-white transition flex items-center gap-1 font-semibold">
                 <span>📄 PDF</span>
               </button>
             </div>
@@ -432,59 +541,63 @@
         });
       }
 
-      // Graph-Aware Cards
+      // Graph-Aware Cards (DialKit Glass Card)
       if (data.report && data.report.findings) {
         data.report.findings.forEach((finding, idx) => {
-        const card = document.createElement('div');
-        const isPatchNow = finding.verdict === 'patch_immediately';
-        const isDeprioritized = finding.verdict === 'deprioritize';
+          const card = document.createElement('div');
+          const isPatchNow = finding.verdict === 'patch_immediately';
+          const isDeprioritized = finding.verdict === 'deprioritize';
 
-        card.className = `p-2.5 rounded-lg border transition cursor-pointer ${
-          isPatchNow
-            ? 'bg-emerald-950/30 border-emerald-800/60 hover:border-emerald-500 glow-green'
-            : isDeprioritized
-              ? 'bg-slate-900/40 border-slate-800/60 hover:border-slate-700 opacity-70'
-              : 'bg-amber-950/20 border-amber-900/40 hover:border-amber-700'
-        }`;
+          card.className = `p-3 rounded-xl border transition-all duration-200 cursor-pointer ${
+            isPatchNow
+              ? 'glass-card border-emerald-500/35 hover:border-emerald-400/70 bg-gradient-to-br from-emerald-950/25 via-black/50 to-black/70 shadow-[0_4px_24px_rgba(16,185,129,0.14),inset_0_1px_0_rgba(255,255,255,0.08)]'
+              : isDeprioritized
+                ? 'glass-card border-white/5 hover:border-white/15 bg-black/30 opacity-65'
+                : 'glass-card border-amber-500/25 hover:border-amber-400/50 bg-gradient-to-br from-amber-950/20 via-black/40 to-black/60'
+          }`;
 
-        card.innerHTML = `
-          <div class="flex items-center justify-between text-xs">
-            <span class="font-bold text-white">#${idx + 1} ${finding.vuln_id}</span>
-            <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${
-              isPatchNow ? 'bg-emerald-500/20 text-emerald-300' : isDeprioritized ? 'bg-slate-800 text-slate-400' : 'bg-amber-500/20 text-amber-300'
-            }">
-              Risk ${finding.graph_risk_score}
-            </span>
-          </div>
-          <div class="text-[10px] text-slate-300 mt-1 flex items-center justify-between">
-            <span class="font-semibold ${isPatchNow ? 'text-emerald-400' : 'text-slate-400'}">
-              ${finding.verdict.replace('_', ' ').toUpperCase()}
-            </span>
-            <span class="${finding.has_internet_exposure ? 'text-cyan-400' : 'text-slate-500'}">
-              ${finding.has_internet_exposure ? '🌐 Ingress Exposed' : '🔒 Internal'}
-            </span>
-          </div>
-          <div class="mt-2 pt-1 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
-            <div class="flex items-center gap-1">
-              <button onclick="event.stopPropagation(); window.open('/report/pdf/' + encodeURIComponent('${finding.vuln_id}'), '_blank');" class="px-2 py-0.5 rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-200 hover:text-white border border-indigo-700/60 transition flex items-center gap-1 font-semibold">
-                <span>📄 PDF</span>
-              </button>
-              <button onclick="event.stopPropagation(); triggerLangGraphDirect('${finding.vuln_id}');" class="px-2 py-0.5 rounded bg-purple-900/60 hover:bg-purple-700 text-purple-200 hover:text-white border border-purple-700/60 transition flex items-center gap-1 font-semibold">
-                <span>🔄 LangGraph</span>
-              </button>
+          card.innerHTML = `
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-white tracking-tight">#${idx + 1} ${finding.vuln_id}</span>
+              <span class="px-2 py-0.5 rounded-full font-mono text-[10px] font-bold ${
+                isPatchNow
+                  ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
+                  : isDeprioritized
+                    ? 'bg-slate-800/60 text-slate-400 border border-slate-700/50'
+                    : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+              }">
+                Risk ${finding.graph_risk_score}
+              </span>
             </div>
-            ${finding.decision_id ? `
-              <button id="card-btn-approve-${finding.decision_id}" onclick="event.stopPropagation(); approveDecision('${finding.decision_id}');" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] shadow flex items-center gap-1 transition" title="Approve staged remediation ticket">
-                <span>✓ Approve</span>
-              </button>
-            ` : `
-              <span class="text-[10px] text-slate-500 italic">No stage req.</span>
-            `}
-          </div>
-        `;
-        card.onclick = () => selectFinding(finding);
-        graphContainer.appendChild(card);
-      });
+            <div class="text-[10px] text-slate-300 mt-1.5 flex items-center justify-between">
+              <span class="font-semibold ${isPatchNow ? 'text-emerald-400' : 'text-slate-400'}">
+                ${finding.verdict.replace('_', ' ').toUpperCase()}
+              </span>
+              <span class="${finding.has_internet_exposure ? 'text-cyan-400' : 'text-slate-500'} font-mono text-[10px]">
+                ${finding.has_internet_exposure ? '🌐 Ingress' : '🔒 Internal'}
+              </span>
+            </div>
+            <div class="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[10px]">
+              <div class="flex items-center gap-1.5">
+                <button onclick="event.stopPropagation(); window.open('/report/pdf/' + encodeURIComponent('${finding.vuln_id}'), '_blank');" class="glass-btn px-2.5 py-0.5 rounded-lg text-indigo-300 hover:text-white transition flex items-center gap-1 font-semibold">
+                  <span>📄 PDF</span>
+                </button>
+                <button onclick="event.stopPropagation(); triggerLangGraphDirect('${finding.vuln_id}');" class="glass-btn px-2.5 py-0.5 rounded-lg text-purple-300 hover:text-white transition flex items-center gap-1 font-semibold">
+                  <span>🔄 Loop</span>
+                </button>
+              </div>
+              ${finding.decision_id ? `
+                <button id="card-btn-approve-${finding.decision_id}" onclick="event.stopPropagation(); approveDecision('${finding.decision_id}');" class="glass-btn-primary px-3 py-0.5 rounded-lg text-white font-bold text-[10px] shadow flex items-center gap-1" title="Approve staged remediation ticket">
+                  <span>✓ Approve</span>
+                </button>
+              ` : `
+                <span class="text-[10px] text-slate-500 font-mono italic">No stage req.</span>
+              `}
+            </div>
+          `;
+          card.onclick = () => selectFinding(finding);
+          graphContainer.appendChild(card);
+        });
       }
     }
 
@@ -500,10 +613,10 @@
       // OSV metadata population
       const sourceBadge = document.getElementById('detail-source-badge');
       sourceBadge.innerText = finding.source || 'OSV.dev';
-      sourceBadge.className = `px-2 py-0.5 rounded text-xs font-semibold ${
+      sourceBadge.className = `px-2.5 py-0.5 rounded-full text-xs font-semibold ${
         finding.source === 'OSV.dev'
-          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-          : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+          ? 'bg-blue-500/15 text-blue-300 border border-blue-500/30'
+          : 'bg-purple-500/15 text-purple-300 border border-purple-500/30'
       }`;
 
       document.getElementById('detail-pkg-name').innerText = `${finding.package_name || 'package'}@${finding.package_version || ''}`;
@@ -520,17 +633,17 @@
 
       const badge = document.getElementById('detail-verdict-badge');
       badge.innerText = finding.verdict.replace('_', ' ');
-      badge.className = `px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
+      badge.className = `px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider ${
         finding.verdict === 'patch_immediately'
-          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-[0_0_12px_rgba(16,185,129,0.25)]'
           : finding.verdict === 'deprioritize'
             ? 'bg-slate-800 text-slate-400 border border-slate-700'
-            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+            : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
       }`;
 
       const expBadge = document.getElementById('detail-exposure-badge');
       expBadge.innerText = finding.has_internet_exposure
-        ? `🌐 Internet Entry Point (Max Data: ${finding.max_data_sensitivity.toUpperCase()})`
+        ? `🌐 Internet Ingress (Crown Jewels: ${finding.max_data_sensitivity.toUpperCase()})`
         : `🔒 Airgapped / Internal (Data: ${finding.max_data_sensitivity.toUpperCase()})`;
 
       document.getElementById('detail-rationale').innerText = finding.rationale;
@@ -547,7 +660,7 @@
         evList.innerHTML = '<div>• No reachable attack path to sensitive datastores discovered.</div>';
       }
 
-      // Fetch and display security guardrail provenance
+      // Security guardrail provenance
       fetch(`/guardrails/${finding.vuln_id}`)
         .then(r => r.json())
         .then(g => {
@@ -570,12 +683,12 @@
         hilAction.innerText = finding.verdict;
         hilDecId.innerText = finding.decision_id;
         hilBadge.innerText = 'STATUS: PENDING APPROVAL';
-        hilBadge.className = 'px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-mono font-bold';
+        hilBadge.className = 'px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-mono font-bold tracking-wide';
         approvalBox.innerHTML = `
-          <button onclick="approveDecision('${finding.decision_id}')" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-1.5 transition">
+          <button onclick="approveDecision('${finding.decision_id}')" class="glass-btn-primary px-4 py-1.5 text-white font-bold text-xs rounded-xl shadow-lg flex items-center gap-1.5 transition cursor-pointer">
             <span>✓ Approve & Dispatch Ticket</span>
           </button>
-          <button onclick="rejectDecisionPrompt('${finding.decision_id}')" class="px-3 py-1.5 bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-xs rounded-lg border border-rose-500/40 transition">
+          <button onclick="rejectDecisionPrompt('${finding.decision_id}')" class="glass-btn px-3 py-1.5 text-rose-300 hover:text-white font-medium text-xs rounded-xl border border-rose-500/30 transition cursor-pointer">
             <span>✕ Reject</span>
           </button>
         `;
@@ -584,8 +697,8 @@
         hilAction.innerText = finding.verdict;
         hilDecId.innerText = 'N/A';
         hilBadge.innerText = 'STATUS: DEPRIORITIZED (No staged ticket needed)';
-        hilBadge.className = 'px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-mono';
-        approvalBox.innerHTML = `<span class="text-xs text-slate-500 italic">No human action required</span>`;
+        hilBadge.className = 'px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-mono';
+        approvalBox.innerHTML = `<span class="text-xs text-slate-500 font-mono italic">No human action required</span>`;
       }
 
       // Highlight in canvas
@@ -607,14 +720,14 @@
           alert(`Decision ${decisionId} rejected.\nReason: ${reason}\nFeedback stored on Decision node in FalkorDB.`);
           const cardBtn = document.getElementById(`card-btn-approve-${decisionId}`);
           if (cardBtn) {
-            cardBtn.outerHTML = `<span class="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold text-[10px] border border-rose-500/30">✕ Rejected</span>`;
+            cardBtn.outerHTML = `<span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-bold text-[10px] border border-rose-500/30 font-mono">✕ Rejected</span>`;
           }
           const hilBadge = document.getElementById('hil-state-badge');
           if (hilBadge) {
             hilBadge.innerText = 'STATUS: REJECTED';
-            hilBadge.className = 'px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-mono font-bold';
+            hilBadge.className = 'px-2.5 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-mono font-bold';
           }
-          document.getElementById('detail-approval-box').innerHTML = `<span class="text-xs text-rose-400 font-semibold">✕ Rejected (${data.decision_id || decisionId})</span>`;
+          document.getElementById('detail-approval-box').innerHTML = `<span class="text-xs text-rose-400 font-semibold font-mono">✕ Rejected (${data.decision_id || decisionId})</span>`;
         } else {
           alert(`Rejection failed: ${data.detail || JSON.stringify(data)}`);
         }
@@ -684,14 +797,14 @@
           if (hilBanner) hilBanner.classList.remove('hidden');
           if (hilBadge) {
             hilBadge.innerText = 'STATUS: PENDING APPROVAL';
-            hilBadge.className = 'px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-mono font-bold';
+            hilBadge.className = 'px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-mono font-bold tracking-wide';
           }
           if (hilDecId) hilDecId.innerText = data.staged_decision.decision_id;
           document.getElementById('detail-approval-box').innerHTML = `
-            <button onclick="approveDecision('${data.staged_decision.decision_id}')" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-1.5 transition">
+            <button onclick="approveDecision('${data.staged_decision.decision_id}')" class="glass-btn-primary px-4 py-1.5 text-white font-bold text-xs rounded-xl shadow-lg flex items-center gap-1.5 transition cursor-pointer">
               <span>✓ Approve & Dispatch Ticket</span>
             </button>
-            <button onclick="rejectDecisionPrompt('${data.staged_decision.decision_id}')" class="px-3 py-1.5 bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-xs rounded-lg border border-rose-500/40 transition">
+            <button onclick="rejectDecisionPrompt('${data.staged_decision.decision_id}')" class="glass-btn px-3 py-1.5 text-rose-300 hover:text-white font-medium text-xs rounded-xl border border-rose-500/30 transition cursor-pointer">
               <span>✕ Reject</span>
             </button>
           `;
@@ -719,20 +832,20 @@
         // Update card button if present
         const cardBtn = document.getElementById(`card-btn-approve-${decisionId}`);
         if (cardBtn) {
-          cardBtn.outerHTML = `<span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold text-[10px] border border-emerald-500/30">✓ Dispatched</span>`;
+          cardBtn.outerHTML = `<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-[10px] border border-emerald-500/30 font-mono">✓ Dispatched</span>`;
         }
 
         // Update detail banner
         const hilBadge = document.getElementById('hil-state-badge');
         if (hilBadge) {
           hilBadge.innerText = `STATUS: DISPATCHED (${data.ticket_id})`;
-          hilBadge.className = 'px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-mono font-bold';
+          hilBadge.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-mono font-bold';
         }
 
         const approvalBox = document.getElementById('detail-approval-box');
         if (approvalBox) {
           approvalBox.innerHTML = `
-            <span class="px-3 py-1.5 rounded bg-emerald-500/20 text-emerald-300 font-bold text-xs border border-emerald-500/30 flex items-center gap-1.5">
+            <span class="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-300 font-bold text-xs border border-emerald-500/30 flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.2)]">
               <span>✓ DISPATCHED: ${data.ticket_id}</span>
             </span>
           `;
@@ -776,14 +889,14 @@
       container.innerHTML = '';
       currentTriageData.trace.forEach(step => {
         const div = document.createElement('div');
-        div.className = 'p-3 rounded bg-slate-950 border border-slate-800 space-y-1';
+        div.className = 'p-3.5 rounded-xl glass-card space-y-1.5';
         div.innerHTML = `
           <div class="flex items-center justify-between text-slate-300">
-            <span class="font-bold text-emerald-400">Step ${step.step}: [${step.call_type.toUpperCase()}] ${step.tool_name || ''}</span>
-            <span class="text-slate-500">${new Date(step.timestamp * 1000).toLocaleTimeString()}</span>
+            <span class="font-bold text-emerald-400 font-mono">Step ${step.step}: [${step.call_type.toUpperCase()}] ${step.tool_name || ''}</span>
+            <span class="text-slate-500 font-mono text-[10px]">${new Date(step.timestamp * 1000).toLocaleTimeString()}</span>
           </div>
-          ${step.arguments ? `<div class="text-slate-400 text-[11px]">Inputs: ${JSON.stringify(step.arguments)}</div>` : ''}
-          ${step.result ? `<div class="text-slate-300 text-[11px] overflow-x-auto bg-slate-900/60 p-1.5 rounded max-h-32"><pre>${JSON.stringify(step.result, null, 2)}</pre></div>` : ''}
+          ${step.arguments ? `<div class="text-slate-400 text-[11px] font-mono">Inputs: ${JSON.stringify(step.arguments)}</div>` : ''}
+          ${step.result ? `<div class="text-slate-300 text-[11px] font-mono overflow-x-auto bg-black/60 border border-white/5 p-2 rounded-lg max-h-36"><pre>${JSON.stringify(step.result, null, 2)}</pre></div>` : ''}
         `;
         container.appendChild(div);
       });
@@ -802,18 +915,18 @@
       container.innerHTML = '';
 
       if (!data.tickets || data.tickets.length === 0) {
-        container.innerHTML = '<div class="text-slate-500 italic p-4 text-center">No approved tickets found yet. Approve an action above to create one.</div>';
+        container.innerHTML = '<div class="text-slate-500 italic p-6 text-center font-medium">No approved tickets found yet. Approve an action above to dispatch one.</div>';
       } else {
         data.tickets.forEach(t => {
           const div = document.createElement('div');
-          div.className = 'p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1 text-slate-300';
+          div.className = 'p-3 rounded-xl glass-card space-y-1.5 text-slate-300';
           div.innerHTML = `
             <div class="flex items-center justify-between">
               <strong class="text-emerald-400 font-mono">${t.ticket_id}</strong>
-              <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">APPROVED</span>
+              <span class="px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold">APPROVED</span>
             </div>
-            <div class="text-xs">Finding: <strong class="text-white">${t.vuln_id}</strong> | Team: <strong class="text-cyan-300">${t.owning_team}</strong> (${t.service})</div>
-            <div class="text-xs text-slate-400">Action: <code class="text-amber-300">${t.action_type}</code> (Risk: ${t.risk_score}/10.0)</div>
+            <div class="text-xs">Finding: <strong class="text-white font-mono">${t.vuln_id}</strong> | Team: <strong class="text-cyan-300">${t.owning_team}</strong> (${t.service})</div>
+            <div class="text-xs text-slate-400">Action: <code class="text-amber-300 font-mono">${t.action_type}</code> (Risk: ${t.risk_score}/10.0)</div>
             <div class="text-xs text-slate-400 italic">${t.rationale}</div>
           `;
           container.appendChild(div);
