@@ -19,6 +19,8 @@ class FindingVerdict(BaseModel):
     osv_url: Optional[str] = Field(None, description="Direct URL to OSV.dev vulnerability entry")
     cvss_raw: float = Field(..., description="Raw CVSS base score (0.0 - 10.0)")
     graph_risk_score: float = Field(..., description="Graph-adjusted risk score (0.0 - 10.0)")
+    confidence: Optional[float] = Field(None, description="Graph confidence score (0.0 - 1.0) reflecting topological completeness")
+    formula_version: Optional[str] = Field("v1.2.0", description="Scoring formula version")
     verdict: Literal["patch_immediately", "schedule_maintenance", "deprioritize"] = Field(
         ..., description="Actionable triage verdict"
     )

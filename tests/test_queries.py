@@ -156,6 +156,40 @@ def test_propose_action_staged_only(graph_conn):
     assert db_res.result_set[0][1] == "patch_immediately"
 
 
+def test_valid_scoring_properties(graph_conn):
+    # 1. Exposure floor test
+    risk = compute_risk("CVE-2021-DECOY-01")
+    assert "effective_exposure" in risk["components"]
+    assert risk["components"]["effective_exposure"] >= 0.15
+    assert risk["graph_risk_score"] > 0.0
+
+    # 2. Confidence score test
+    sleeper_risk = compute_risk("CVE-2023-SLEEPER-01")
+    decoy_risk = compute_risk("CVE-2021-DECOY-01")
+    assert "confidence" in sleeper_risk
+    assert "confidence" in decoy_risk
+    assert 0.3 <= sleeper_risk["confidence"] <= 1.0
+    assert 0.3 <= decoy_risk["confidence"] <= 1.0
+    # Sleeper with verified ingress & active degree has higher confidence than old, unexposed decoy
+    assert sleeper_risk["confidence"] > decoy_risk["confidence"]
+
+    # 3. Formula version on Decision node
+    res = propose_action(
+        vuln_id="CVE-2023-SLEEPER-03",
+        action_type="patch_immediately",
+        rationale="Testing formula versioning on Decision node.",
+        evidence=["ingress -> payments-db"]
+    )
+    assert res["formula_version"] == "v1.2.0"
+    assert "confidence" in res
+
+    check_q = "MATCH (d:Decision {id: $id}) RETURN d.formula_version, d.confidence"
+    db_res = graph_conn.query(check_q, {"id": res["decision_id"]})
+    assert len(db_res.result_set) == 1
+    assert db_res.result_set[0][0] == "v1.2.0"
+    assert db_res.result_set[0][1] is not None
+
+
 def test_ground_truth_graph_reordering():
     """
     CRUCIAL HACKATHON EVALUATION TEST:

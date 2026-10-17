@@ -179,6 +179,8 @@ async def run_deterministic_triage(vuln_ids: List[str]) -> TriageResponse:
             osv_url=osv_link,
             cvss_raw=ctx["cvss"],
             graph_risk_score=risk["graph_risk_score"],
+            confidence=risk.get("confidence", 0.90),
+            formula_version=risk.get("formula_version", "v1.2.0"),
             verdict=risk["verdict"],
             impacted_services=impacted,
             owning_teams=sorted(list(owning_teams)) if owning_teams else ["unassigned"],
@@ -214,7 +216,13 @@ async def run_deterministic_triage(vuln_ids: List[str]) -> TriageResponse:
         reverse=True
     )
     graph_ranking = [
-        {"vuln_id": f.vuln_id, "graph_risk": f.graph_risk_score, "verdict": f.verdict, "exposure": f.has_internet_exposure}
+        {
+            "vuln_id": f.vuln_id,
+            "graph_risk": f.graph_risk_score,
+            "confidence": f.confidence,
+            "verdict": f.verdict,
+            "exposure": f.has_internet_exposure,
+        }
         for f in findings
     ]
 

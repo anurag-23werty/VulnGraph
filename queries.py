@@ -13,6 +13,9 @@ from typing import Dict, List, Any, Optional
 
 from schema import get_graph
 
+EXPOSURE_FLOOR = 0.15
+FORMULA_VERSION = "v1.2.0"
+
 
 def get_finding_context(vuln_id: str) -> Dict[str, Any]:
     """
@@ -334,6 +337,9 @@ def compute_risk(vuln_id: str) -> Dict[str, Any]:
     else:
         exposure = 0.20
 
+    # Effective exposure with exposure floor for incomplete graph topologies
+    effective_exposure = max(exposure, EXPOSURE_FLOOR)
+
     # Data sensitivity factor
     if max_data_sensitivity == "high":
         data_sensitivity = 1.0
@@ -352,8 +358,32 @@ def compute_risk(vuln_id: str) -> Dict[str, Any]:
     critical_path_multiplier = 1.6 if (is_ingress_reachable and max_data_sensitivity == "high") else 1.0
 
     # Graph risk score (0.0 to 10.0 scale)
-    raw_score = 10.0 * (cvss_norm * exposure * data_sensitivity * blast_radius_factor) * critical_path_multiplier
+    raw_score = 10.0 * (cvss_norm * effective_exposure * data_sensitivity * blast_radius_factor) * critical_path_multiplier
     graph_risk = round(min(10.0, raw_score), 2)
+
+    # Confidence score (0.0 - 1.0 scale):
+    # Drops when node has low degree (sparse topology), path relies on unverified edges, or finding is old.
+    confidence = 1.0
+    if len(impacted_services) == 0:
+        confidence -= 0.30
+    elif len(impacted_services) == 1:
+        confidence -= 0.10
+
+    if not is_ingress_reachable:
+        confidence -= 0.10
+
+    # Age penalty: extract publication year if present in CVE ID (e.g. CVE-2021-...)
+    if "CVE-" in vuln_id:
+        try:
+            year_part = vuln_id.split("-")[1]
+            if year_part.isdigit():
+                cve_year = int(year_part)
+                if cve_year <= 2022:
+                    confidence -= 0.05
+        except Exception:
+            pass
+
+    confidence = round(max(0.30, min(1.0, confidence)), 2)
 
     # Suggested verdict based on deterministic score
     if graph_risk >= 7.0:
@@ -369,11 +399,15 @@ def compute_risk(vuln_id: str) -> Dict[str, Any]:
         "components": {
             "cvss_norm": cvss_norm,
             "exposure": exposure,
+            "effective_exposure": effective_exposure,
             "data_sensitivity": data_sensitivity,
             "blast_radius_factor": blast_radius_factor,
             "critical_path_multiplier": critical_path_multiplier,
+            "formula_version": FORMULA_VERSION,
         },
         "graph_risk_score": graph_risk,
+        "confidence": confidence,
+        "formula_version": FORMULA_VERSION,
         "verdict": verdict,
         "impacted_services": impacted_services,
         "has_internet_exposure": is_ingress_reachable,
@@ -394,6 +428,8 @@ def propose_action(vuln_id: str, action_type: str, rationale: str, evidence: Lis
     # Calculate deterministic risk score for Decision node
     risk_data = compute_risk(vuln_id)
     risk_score = risk_data.get("graph_risk_score", 5.0)
+    confidence = risk_data.get("confidence", 0.90)
+    formula_version = risk_data.get("formula_version", FORMULA_VERSION)
 
     # Find the primary service impacted
     finding = get_finding_context(vuln_id)
@@ -408,6 +444,8 @@ def propose_action(vuln_id: str, action_type: str, rationale: str, evidence: Lis
         id: $id,
         verdict: $action_type,
         risk: $risk,
+        confidence: $confidence,
+        formula_version: $formula_version,
         ts: $ts,
         status: 'pending',
         action_type: $action_type,
@@ -428,6 +466,8 @@ def propose_action(vuln_id: str, action_type: str, rationale: str, evidence: Lis
         "id": decision_id,
         "action_type": action_type,
         "risk": float(risk_score),
+        "confidence": float(confidence),
+        "formula_version": formula_version,
         "ts": ts,
         "rationale": rationale,
         "evidence": evidence_json,
@@ -441,5 +481,7 @@ def propose_action(vuln_id: str, action_type: str, rationale: str, evidence: Lis
         "action_type": action_type,
         "service": primary_svc,
         "risk": risk_score,
+        "confidence": confidence,
+        "formula_version": formula_version,
         "message": f"Action staged successfully with ID '{decision_id}'. Requires human approval before execution."
     }

@@ -1,8 +1,17 @@
-"""
-Tests for the Ground-Truth Evaluation Benchmark (eval.py).
-"""
+import sys
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from eval import run_benchmark_evaluation, run_full_corpus_evaluation, format_markdown_table
+from eval import (
+    run_benchmark_evaluation,
+    run_full_corpus_evaluation,
+    run_ablation_study,
+    run_sensitivity_analysis,
+    format_markdown_table,
+    format_ablation_markdown,
+    format_sensitivity_markdown
+)
 
 
 def test_benchmark_evaluation_inversion():
@@ -37,6 +46,32 @@ def test_markdown_table_generation():
     assert "CVE-2021-DECOY-01" in md
     assert "patch_immediately" in md
     assert "deprioritize" in md
+
+
+def test_ablation_study():
+    """Verify that separation margin grows monotonically as graph components are added."""
+    ablation = run_ablation_study()
+    assert "rows" in ablation
+    assert "margins" in ablation
+    m = ablation["margins"]
+    # Stage 1: Negative margin (-4.5 pts)
+    assert m["stage1_cvss"] < 0
+    # Stage 2: Positive margin (+5.67 pts)
+    assert m["stage2_exposure"] > 0
+    # Stage 4: Full model separation > 5.0 pts
+    assert m["stage4_full_graph"] > 5.0
+    md = format_ablation_markdown(ablation)
+    assert "Separation Margin" in md
+
+
+def test_sensitivity_analysis():
+    """Verify ranking stability across 50 Monte Carlo perturbations."""
+    sens = run_sensitivity_analysis(num_trials=50, seed=42)
+    assert sens["stability_pct"] == 100.0
+    assert sens["min_margin"] > 4.0
+    assert "PASSED" in sens["status"]
+    md = format_sensitivity_markdown(sens)
+    assert "Monte Carlo Trials" in md
 
 
 def test_full_corpus_evaluation():
