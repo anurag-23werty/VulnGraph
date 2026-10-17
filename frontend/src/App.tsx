@@ -7,8 +7,10 @@ import { RankingView } from './components/RankingView';
 import { EvidencePanel } from './components/EvidencePanel';
 import { ToolsReference } from './components/ToolsReference';
 import { ActionsPanel } from './components/ActionsPanel';
+import { MethodSection } from './components/MethodSection';
 
 export default function App() {
+
 
 
   const [viewMode, setViewMode] = useState<'analyst' | 'trace'>('analyst');
@@ -283,6 +285,10 @@ export default function App() {
             if (el) el.scrollIntoView({ behavior: 'smooth' });
           }}
         />
+
+        {/* 6. Method: Ablation table, KEV validation, disclaimers */}
+        <MethodSection />
+
 
 
 
