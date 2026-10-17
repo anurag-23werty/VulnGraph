@@ -13,6 +13,37 @@ interface EvidencePanelProps {
 export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding }) => {
   const [activeTab, setActiveTab] = useState<'summary' | 'cypher' | 'json'>('summary');
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
+  const [fontsReady, setFontsReady] = useState(false);
+  const fgRef = useRef<any>(null);
+
+  // Wait for document.fonts.load() before first draw
+  useEffect(() => {
+    if (typeof document !== 'undefined' && 'fonts' in document) {
+      Promise.all([
+        document.fonts.load('400 12px "IBM Plex Sans"'),
+        document.fonts.load('600 12px "IBM Plex Sans"'),
+        document.fonts.load('400 12px "IBM Plex Mono"'),
+        document.fonts.load('500 12px "IBM Plex Mono"'),
+      ])
+        .then(() => {
+          setFontsReady(true);
+        })
+        .catch(() => {
+          setFontsReady(true);
+        });
+    } else {
+      setFontsReady(true);
+    }
+  }, []);
+
+  // Redraw once fonts are ready so canvas labels do not render in fallback
+  useEffect(() => {
+    if (fontsReady && fgRef.current) {
+      if (typeof fgRef.current.refresh === 'function') {
+        fgRef.current.refresh();
+      }
+    }
+  }, [fontsReady]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [graphDimensions, setGraphDimensions] = useState<{ width: number; height: number }>({
@@ -344,7 +375,7 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
 
           {/* Canvas Rendering */}
           <div style={{ flex: 1, position: 'relative' }}>
-            {graphQuery.isLoading ? (
+            {graphQuery.isLoading || !fontsReady ? (
               <div
                 style={{
                   position: 'absolute',
@@ -374,6 +405,7 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
               </div>
             ) : (
               <ForceGraph2D
+                ref={fgRef}
                 width={graphDimensions.width}
                 height={graphDimensions.height}
                 graphData={graphData}
@@ -421,7 +453,10 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
                   // Text Label for highlighted nodes or close zoom
                   if (isHl || globalScale > 1.8) {
                     const fontSize = Math.max(9, Math.min(12, 11 / globalScale));
-                    ctx.font = `${isHl ? '600' : '400'} ${fontSize}px Geist Variable, sans-serif`;
+                    const isIdentifier = isVuln || node.label === 'Service' || node.label === 'DataStore' || /CVE-\d+/i.test(label);
+                    ctx.font = isIdentifier
+                      ? `${isHl ? '500' : '400'} ${fontSize}px "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace`
+                      : `${isHl ? '600' : '400'} ${fontSize}px "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'top';
                     ctx.fillStyle = isHl ? '#141413' : '#6B6A66';
@@ -548,10 +583,10 @@ export const EvidencePanel: React.FC<EvidencePanelProps> = ({ vulnId, finding })
                         marginBottom: 'var(--space-4)',
                       }}
                     >
-                      <div><strong>Package:</strong> {finding.package}</div>
-                      <div><strong>Service:</strong> {finding.service}</div>
+                      <div><strong>Package:</strong> <span className="mono">{finding.package}</span></div>
+                      <div><strong>Service:</strong> <span className="mono">{finding.service}</span></div>
                       <div><strong>Owner:</strong> {finding.owner}</div>
-                      <div><strong>Fix version:</strong> {finding.fix_version || 'N/A'}</div>
+                      <div><strong>Fix version:</strong> <span className="mono">{finding.fix_version || 'N/A'}</span></div>
                     </div>
                   </div>
                 ) : (

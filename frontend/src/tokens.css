@@ -3,6 +3,50 @@
    Typographic, quiet, document-like. 1px rules, no shadows, no glassmorphism.
    ============================================================================== */
 
+/* ==============================================================================
+   Self-Hosted Font Faces (IBM Plex Sans & IBM Plex Mono - SIL Open Font License)
+   ============================================================================== */
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/static/fonts/ibm-plex-sans-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/static/fonts/ibm-plex-sans-latin-500-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/static/fonts/ibm-plex-sans-latin-600-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/static/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/static/fonts/ibm-plex-mono-latin-500-normal.woff2') format('woff2');
+}
+
 :root {
   /* Surface & Base Palette (Light Theme Default) */
   --color-paper: #F7F6F3;
@@ -34,8 +78,8 @@
   --state-rejected-bg: #F1F3F4;
 
   /* Typography */
-  --font-sans: 'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Consolas, monospace;
 
   /* Font Sizes: Headline + At most three body sizes */
   --text-headline: clamp(2rem, 3.5vw, 2.75rem);
@@ -143,12 +187,17 @@ body {
   min-height: 100vh;
   background-color: var(--color-paper);
   color: var(--color-ink);
+  letter-spacing: 0;
 }
 
 /* Tabular numerals for all score displays and IDs */
 .tnum, code, pre, .mono, [data-tabular] {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
+}
+
+.mono {
+  font-family: var(--font-mono);
 }
 
 code, pre {

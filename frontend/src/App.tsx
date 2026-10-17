@@ -202,9 +202,9 @@ export default function App() {
           <h1
             style={{
               fontSize: 'var(--text-headline)',
-              fontWeight: 300,
+              fontWeight: 600,
               lineHeight: 'var(--leading-tight)',
-              letterSpacing: '-0.025em',
+              letterSpacing: '-0.01em',
               color: 'var(--color-ink)',
               maxWidth: '850px',
               marginBottom: 'var(--space-4)',

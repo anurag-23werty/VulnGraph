@@ -346,7 +346,7 @@ export const RankingView: React.FC<RankingViewProps> = ({
                           marginTop: '2px',
                         }}
                       >
-                        {item.finding.package} • {item.finding.service}
+                        <span className="mono">{item.finding.package}</span> • <span className="mono">{item.finding.service}</span>
                       </div>
                     </div>
                   </div>
@@ -508,7 +508,7 @@ export const RankingView: React.FC<RankingViewProps> = ({
                           marginTop: '2px',
                         }}
                       >
-                        {item.finding.package} • {item.finding.service}
+                        <span className="mono">{item.finding.package}</span> • <span className="mono">{item.finding.service}</span>
                       </div>
                     </div>
                   </div>

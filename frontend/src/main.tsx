@@ -2,11 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// Self-hosted variable fonts per spec
-import '@fontsource-variable/geist';
-import '@fontsource-variable/geist-mono';
-
-// Design tokens CSS
+// Design tokens CSS (includes self-hosted IBM Plex Sans & IBM Plex Mono)
 import './tokens.css';
 
 import App from './App';

@@ -88,7 +88,7 @@ export const ActionsPanel: React.FC<ActionsPanelProps> = ({ onSelectFinding }) =
           backgroundColor: bgVar,
           border: `1px solid ${colorVar}`,
           textTransform: 'uppercase',
-          letterSpacing: '0.03em',
+          letterSpacing: '0.04em',
         }}
       >
         {status}
@@ -282,7 +282,7 @@ export const ActionsPanel: React.FC<ActionsPanelProps> = ({ onSelectFinding }) =
                     marginBottom: 'var(--space-2)',
                   }}
                 >
-                  Team: <strong>{d.owning_team}</strong> • Service: <strong>{d.service}</strong>
+                  Team: <strong>{d.owning_team}</strong> • Service: <strong className="mono">{d.service}</strong>
                   {d.approved_by && ` • Approved by: ${d.approved_by}`}
                   {d.rejected_by && ` • Rejected by: ${d.rejected_by}`}
                   {d.ticket_id && (

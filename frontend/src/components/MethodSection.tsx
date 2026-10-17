@@ -164,7 +164,7 @@ export const MethodSection: React.FC = () => {
                         padding: '10px 12px',
                         textAlign: 'right',
                         color: 'var(--color-success)',
-                        fontWeight: 700,
+                        fontWeight: 600,
                       }}
                     >
                       +{data.ablation.margins.stage4_full_graph.toFixed(2)} pts
