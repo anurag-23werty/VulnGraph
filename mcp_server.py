@@ -141,7 +141,7 @@ def propose_action(vuln_id: str, action_type: str, rationale: str, evidence: Lis
 
 async def get_tools_for_agent() -> List[Dict[str, Any]]:
     """
-    Returns MCP tool definitions formatted as standard OpenAI/Mistral function schemas:
+    Returns MCP tool definitions formatted as standard Groq/OpenAI function schemas:
     {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
     """
     tools = await mcp.list_tools()

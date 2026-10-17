@@ -20,8 +20,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OSV_API_KEY = os.getenv("OSV_API_KEY", "").strip()
-
 from schema import get_graph, init_schema, clear_graph
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -172,13 +170,8 @@ def query_osv_vulnerabilities(name: str, version: str, ecosystem: str) -> List[D
         "version": version
     }
 
-    headers = {"Content-Type": "application/json"}
-    if OSV_API_KEY:
-        headers["Authorization"] = f"Bearer {OSV_API_KEY}"
-        headers["X-API-Key"] = OSV_API_KEY
-
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=5)
+        resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             with open(cache_file, "w", encoding="utf-8") as f:
@@ -197,18 +190,14 @@ def query_osv_vulnerabilities(name: str, version: str, ecosystem: str) -> List[D
 
 def check_osv_fetch(pkg_name: str = "requests", version: str = "2.25.1", ecosystem: str = "PyPI") -> Dict[str, Any]:
     """
-    Directly tests fetching live vulnerability findings from OSV.dev,
-    confirming OSV API connectivity and API key authorization.
+    Directly tests fetching live vulnerability findings from open-source OSV.dev API
+    (public open-source service, no API key required).
     """
     print("=" * 60)
-    print("CHECKING LIVE OSV.DEV DATA FETCH")
+    print("CHECKING LIVE OSV.DEV OPEN-SOURCE DATA FETCH")
     print("=" * 60)
     print(f"Target Package : {pkg_name}@{version} ({ecosystem})")
-    if OSV_API_KEY:
-        masked_key = OSV_API_KEY[:4] + "..." + OSV_API_KEY[-4:] if len(OSV_API_KEY) > 8 else "***"
-        print(f"OSV_API_KEY    : Configured ({masked_key})")
-    else:
-        print("OSV_API_KEY    : None (Using public anonymous access)")
+    print("API Endpoint   : https://api.osv.dev/v1/query (Public Open Source)")
 
     url = "https://api.osv.dev/v1/query"
     payload = {
@@ -219,9 +208,6 @@ def check_osv_fetch(pkg_name: str = "requests", version: str = "2.25.1", ecosyst
         "version": version
     }
     headers = {"Content-Type": "application/json"}
-    if OSV_API_KEY:
-        headers["Authorization"] = f"Bearer {OSV_API_KEY}"
-        headers["X-API-Key"] = OSV_API_KEY
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=8)
