@@ -5,8 +5,10 @@ import { DEFAULT_WHAT_IF_PARAMS, type WhatIfParams } from './lib/formula';
 import { WhatIfControls } from './components/WhatIfControls';
 import { RankingView } from './components/RankingView';
 import { EvidencePanel } from './components/EvidencePanel';
+import { ToolsReference } from './components/ToolsReference';
 
 export default function App() {
+
   const [viewMode, setViewMode] = useState<'analyst' | 'trace'>('analyst');
   const [whatIfParams, setWhatIfParams] = useState<WhatIfParams>(DEFAULT_WHAT_IF_PARAMS);
   const [selectedVulnId, setSelectedVulnId] = useState<string | null>(null);
@@ -267,6 +269,10 @@ export default function App() {
         {activeVulnId && (
           <EvidencePanel vulnId={activeVulnId} finding={selectedFinding} />
         )}
+
+        {/* 4. Tools Control Reference */}
+        <ToolsReference />
+
 
 
         {/* Raw Trace Mode Drawer (Shows raw tool calls and JSON everywhere when Trace is active) */}
