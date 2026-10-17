@@ -58,36 +58,51 @@ def get_finding_context(vuln_id: str) -> Dict[str, Any]:
 
 def blast_radius(vuln_id: str) -> Dict[str, Any]:
     """
-    Computes multi-hop blast radius for a vulnerability traversing DEPENDS_ON*1..6
-    from Service nodes down to the vulnerable Package.
-    Returns impacted services, whether any are internet facing, and dependency chains.
+    Computes multi-hop blast radius without path explosion:
+      1. Distinct cheap impact discovery: who is impacted.
+      2. Single clean explanatory chain per service via shortestPath.
     """
     graph = get_graph()
-    cypher = """
-    MATCH path = (s:Service)-[:DEPENDS_ON*1..6]->(p:Package)<-[:AFFECTS]-(v:Vuln {id: $vuln_id})
-    RETURN s.name AS service,
-           s.internet_facing AS internet_facing,
-           [n in nodes(path) | coalesce(n.name, n.id)] AS chain
+
+    # Step 1: Distinct cheap impact discovery
+    distinct_cypher = """
+    MATCH (v:Vuln {id: $vuln_id})-[:AFFECTS]->(p:Package)
+    MATCH (s:Service)-[:DEPENDS_ON*1..6]->(p)
+    RETURN DISTINCT s.name AS service, s.internet_facing AS internet_facing
     LIMIT 25
     """
-    res = graph.ro_query(cypher, {"vuln_id": vuln_id})
-    impacted_services = set()
+    res = graph.ro_query(distinct_cypher, {"vuln_id": vuln_id})
+    impacted_services = []
     has_internet_facing = False
-    chains = []
 
     for row in res.result_set:
-        svc_name, internet_facing, chain = row[0], row[1], row[2]
-        impacted_services.add(svc_name)
+        svc_name, internet_facing = row[0], bool(row[1])
+        impacted_services.append(svc_name)
         if internet_facing:
             has_internet_facing = True
-        chains.append({"service": svc_name, "chain": chain})
+
+    # Step 2: Fetch one explanatory chain per service with shortestPath
+    chains = []
+    for svc in impacted_services[:10]:
+        sp_cypher = """
+        MATCH (s:Service {name: $svc}), (p:Package)<-[:AFFECTS]-(v:Vuln {id: $vuln_id})
+        WITH s, p, shortestPath((s)-[:DEPENDS_ON*1..6]->(p)) AS sp
+        WHERE sp IS NOT NULL
+        RETURN [n in nodes(sp) | coalesce(n.name, n.id)] AS chain
+        LIMIT 1
+        """
+        res_sp = graph.ro_query(sp_cypher, {"svc": svc, "vuln_id": vuln_id})
+        if res_sp.result_set:
+            chains.append({"service": svc, "chain": res_sp.result_set[0][0]})
+        else:
+            chains.append({"service": svc, "chain": [svc, vuln_id]})
 
     return {
         "vuln_id": vuln_id,
         "impacted_service_count": len(impacted_services),
-        "impacted_services": sorted(list(impacted_services)),
+        "impacted_services": sorted(impacted_services),
         "has_internet_facing": has_internet_facing,
-        "dependency_chains": chains[:25]
+        "dependency_chains": chains
     }
 
 
