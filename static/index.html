@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VulnGraph | Agentic Connected-Data Vulnerability Triage</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Force Graph 2D CDN -->
+  <script src="https://unpkg.com/force-graph"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              500: '#10b981',
+              600: '#059669',
+              900: '#064e3b'
+            },
+            darkbg: '#0b0f19',
+            cardbg: '#111827',
+            panelbg: '#1e293b'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0b0f19; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    .glow-red { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+    .glow-green { box-shadow: 0 0 15px rgba(16, 185, 129, 0.4); }
+  </style>
+</head>
+<body class="bg-darkbg text-slate-100 min-h-screen flex flex-col font-sans antialiased overflow-hidden">
+
+  <!-- Top Navigation Bar -->
+  <header class="h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur px-6 flex items-center justify-between z-20">
+    <div class="flex items-center space-x-3">
+      <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-lg">
+        ⚡
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+          VulnGraph
+          <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">FalkorDB Hackathon</span>
+        </h1>
+        <p class="text-xs text-slate-400">Agentic Connected-Data Vulnerability Triage</p>
+      </div>
+    </div>
+
+    <!-- Live System Badges & Actions -->
+    <div class="flex items-center space-x-4">
+      <div class="flex items-center gap-3 text-xs">
+        <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          FalkorDB: <strong class="text-white">Active (6379)</strong>
+        </span>
+        <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+          <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+          Agent: <strong class="text-white">Groq AI (LPU)</strong>
+        </span>
+      </div>
+
+      <button id="btn-triage-benchmark" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
+        <span>⚡ Run Benchmark Triage</span>
+      </button>
+
+      <button id="btn-triage-osv" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition">
+        <span>Triage Real OSV Data</span>
+      </button>
+
+      <button id="btn-view-tickets" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+        <span>📋 Approved Tickets</span>
+        <span id="ticket-badge-count" class="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 rounded text-[10px] font-bold">0</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Grid Workspace -->
+  <div class="flex-1 grid grid-cols-12 overflow-hidden">
+
+    <!-- Column 1 & 2: Two Ranked Prioritization Lists (Width: 5 cols) -->
+    <div class="col-span-5 border-r border-slate-800 flex flex-col bg-slate-950/60 overflow-hidden">
+      <!-- Top Subheader -->
+      <div class="p-3 border-b border-slate-800 bg-slate-900/40 grid grid-cols-2 gap-2 text-xs">
+        <div class="flex items-center gap-1.5 text-slate-400">
+          <span class="w-2.5 h-2.5 rounded bg-rose-500/40 border border-rose-500"></span>
+          <strong>Baseline (CVSS Only)</strong>
+        </div>
+        <div class="flex items-center gap-1.5 text-emerald-400">
+          <span class="w-2.5 h-2.5 rounded bg-emerald-500/40 border border-emerald-500"></span>
+          <strong>VulnGraph (Graph-Aware)</strong>
+        </div>
+      </div>
+
+      <!-- Comparison Lists Container -->
+      <div class="flex-1 grid grid-cols-2 divide-x divide-slate-800 overflow-y-auto p-3 gap-3">
+
+        <!-- Column A: CVSS-Only (The Illusion) -->
+        <div class="space-y-2.5" id="baseline-list">
+          <div class="text-[11px] text-slate-400 px-1 italic">
+            Sorted by raw CVSS score alone:
+          </div>
+          <div id="baseline-items" class="space-y-2">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <!-- Column B: Graph-Aware (The Reality) -->
+        <div class="space-y-2.5 pl-3" id="graph-list">
+          <div class="text-[11px] text-emerald-400/80 px-1 font-medium">
+            Reordered by Attack Path & Crown Jewels:
+          </div>
+          <div id="graph-items" class="space-y-2">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Execution Status Bar -->
+      <div id="status-bar" class="p-2.5 border-t border-slate-800 bg-slate-900/60 text-xs text-slate-400 flex items-center justify-between">
+        <span id="status-msg">Click "Run Benchmark Triage" to begin graph-aware ranking.</span>
+        <span id="latency-msg" class="text-slate-500"></span>
+      </div>
+    </div>
+
+    <!-- Center/Right Canvas & Details (Width: 7 cols) -->
+    <div class="col-span-7 flex flex-col overflow-hidden bg-slate-950">
+
+      <!-- Interactive 2D Force-Graph Canvas -->
+      <div class="relative flex-1 bg-slate-950" id="graph-container">
+        <div id="force-graph-canvas" class="w-full h-full"></div>
+
+        <!-- Canvas Legend & Overlay -->
+        <div class="absolute top-4 left-4 p-3 rounded-lg bg-slate-900/85 border border-slate-800 text-xs backdrop-blur space-y-1.5 pointer-events-none z-10">
+          <div class="font-bold text-slate-200 text-[11px] uppercase tracking-wider mb-1">Graph Legend</div>
+          <div class="flex items-center gap-2 text-slate-300">
+            <span class="w-3 h-3 rounded-full bg-[#06b6d4]"></span> Internet Gateway (Ingress)
+          </div>
+          <div class="flex items-center gap-2 text-slate-300">
+            <span class="w-3 h-3 rounded-full bg-[#10b981]"></span> Internal Microservice
+          </div>
+          <div class="flex items-center gap-2 text-slate-300">
+            <span class="w-3 h-3 rounded-full bg-[#f59e0b]"></span> High-Sensitivity DataStore
+          </div>
+          <div class="flex items-center gap-2 text-slate-300">
+            <span class="w-3 h-3 rounded-full bg-[#8b5cf6]"></span> Software Package
+          </div>
+          <div class="flex items-center gap-2 text-rose-400 font-semibold">
+            <span class="w-3 h-3 rounded-full bg-[#ef4444] animate-ping"></span> Active Attack Path
+          </div>
+        </div>
+
+        <!-- Zoom Controls -->
+        <div class="absolute bottom-4 right-4 flex flex-col gap-1.5 z-10">
+          <button id="btn-zoom-fit" class="p-2 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs shadow" title="Reset View">
+            🔍 Reset View
+          </button>
+        </div>
+      </div>
+
+      <!-- Investigation & Human Approval Bottom Panel -->
+      <div id="detail-panel" class="h-64 border-t border-slate-800 bg-slate-900/95 p-4 flex flex-col overflow-y-auto">
+        <div id="detail-empty" class="h-full flex items-center justify-center text-slate-500 text-sm">
+          Select any finding from the lists above to inspect its attack path, evidence, and agent rationale.
+        </div>
+
+        <div id="detail-content" class="hidden space-y-3">
+          <div class="flex items-start justify-between">
+            <div>
+              <div class="flex items-center gap-2.5 flex-wrap">
+                <h3 id="detail-vuln-id" class="text-base font-bold text-white">CVE-XXXX</h3>
+                <span id="detail-verdict-badge" class="px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider">PATCH_IMMEDIATELY</span>
+                <span id="detail-source-badge" class="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-xs font-semibold border border-blue-500/30">OSV.dev</span>
+                <span id="detail-exposure-badge" class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-xs border border-slate-700"></span>
+                <a id="detail-osv-link" href="#" target="_blank" class="text-cyan-400 hover:underline text-xs flex items-center gap-1">View on OSV.dev ↗</a>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-slate-400 mt-1">
+                <span>Package: <strong id="detail-pkg-name" class="text-purple-300"></strong></span>
+                <span>•</span>
+                <span>Fix Version: <strong id="detail-fix-ver" class="text-emerald-400"></strong></span>
+              </div>
+              <p id="detail-summary" class="text-xs text-slate-300 mt-1 italic"></p>
+            </div>
+
+            <!-- Approve Ticket CTA Button -->
+            <div id="detail-approval-box">
+              <button id="btn-approve-action" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
+                <span>✓ Approve Ticket</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Evidence Vector Flow -->
+          <div class="p-2.5 rounded bg-slate-950/70 border border-slate-800 text-xs">
+            <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+              <span>🎯 Traversed Attack Path & Crown Jewels:</span>
+            </div>
+            <div id="detail-evidence-list" class="space-y-1 font-mono text-[11px] text-rose-300">
+              <!-- Evidence lines -->
+            </div>
+          </div>
+
+          <!-- Agent Rationale & Trace Toggle -->
+          <div class="flex items-center justify-between text-xs pt-1">
+            <div class="text-slate-300 flex-1 pr-4">
+              <strong>Agent Reasoning:</strong> <span id="detail-rationale" class="text-slate-400"></span>
+            </div>
+            <button id="btn-toggle-trace" class="text-emerald-400 hover:underline text-xs shrink-0">
+              Show Agent Tool Trace (⚡)
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Execution Trace Modal / Drawer -->
+  <div id="trace-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-6">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+        <h3 class="font-bold text-white text-sm flex items-center gap-2">
+          <span>⚡ Agent Execution Trace</span>
+          <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">FastMCP Tools</span>
+        </h3>
+        <button id="btn-close-trace" class="text-slate-400 hover:text-white text-lg font-bold">&times;</button>
+      </div>
+      <div id="trace-steps-container" class="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-xs">
+        <!-- Trace steps dynamically inserted -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Approved Tickets Modal -->
+  <div id="tickets-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-6">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+        <h3 class="font-bold text-white text-sm flex items-center gap-2">
+          <span>📋 Approved Security Tickets (tickets.jsonl)</span>
+        </h3>
+        <button id="btn-close-tickets" class="text-slate-400 hover:text-white text-lg font-bold">&times;</button>
+      </div>
+      <div id="tickets-list-container" class="flex-1 overflow-y-auto p-4 space-y-2.5 text-xs">
+        <!-- Tickets dynamically inserted -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Logic -->
+  <script>
+    let graphInstance = null;
+    let currentTriageData = null;
+    let selectedFinding = null;
+
+    // Initialize 2D Force Graph Canvas
+    function initForceGraph() {
+      const container = document.getElementById('force-graph-canvas');
+      graphInstance = ForceGraph()(container)
+        .backgroundColor('#0b0f19')
+        .nodeId('id')
+        .nodeLabel(node => `<strong>${node.name}</strong><br/>Type: ${node.label}<br/>${node.sensitivity ? 'Sensitivity: ' + node.sensitivity : ''}${node.cvss ? 'CVSS: ' + node.cvss : ''}`)
+        .nodeVal(node => node.val || 8)
+        .nodeColor(node => node.highlight ? '#ef4444' : node.color)
+        .linkColor(link => link.highlight ? '#ef4444' : '#334155')
+        .linkWidth(link => link.highlight ? 3.5 : 1)
+        .linkDirectionalParticles(link => link.highlight ? 4 : 0)
+        .linkDirectionalParticleWidth(3)
+        .linkDirectionalParticleSpeed(0.008)
+        .nodeCanvasObject((node, ctx, globalScale) => {
+          const r = Math.sqrt(node.val || 8) * 3;
+          // Outer glow if highlighted
+          if (node.highlight) {
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, r + 4, 0, 2 * Math.PI, false);
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.4)';
+            ctx.fill();
+          }
+          // Main node circle
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
+          ctx.fillStyle = node.highlight ? '#ef4444' : node.color;
+          ctx.fill();
+          ctx.strokeStyle = node.highlight ? '#fee2e2' : 'rgba(255,255,255,0.2)';
+          ctx.lineWidth = node.highlight ? 2 : 1;
+          ctx.stroke();
+
+          // Label text
+          const fontSize = 11 / globalScale;
+          ctx.font = `${fontSize}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillStyle = node.highlight ? '#f87171' : '#94a3b8';
+          ctx.fillText(node.name, node.x, node.y + r + 2);
+        });
+
+      // Load initial general topology
+      loadGraphPath(null);
+    }
+
+    async function loadGraphPath(vulnId) {
+      try {
+        const url = vulnId ? `/graph/path?vuln_id=${encodeURIComponent(vulnId)}` : '/graph/path';
+        const res = await fetch(url);
+        const data = await res.json();
+        if (graphInstance && data.nodes) {
+          graphInstance.graphData({
+            nodes: data.nodes,
+            links: data.links
+          });
+        }
+      } catch (e) {
+        console.error('Failed to load graph path:', e);
+      }
+    }
+
+    // Run Triage
+    async function triggerTriage(vulnIds = null) {
+      const statusBar = document.getElementById('status-msg');
+      const latencyMsg = document.getElementById('latency-msg');
+      statusBar.innerText = '⚡ Agent running multi-step graph triage with FastMCP tools...';
+
+      try {
+        const res = await fetch('/triage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(vulnIds ? { vuln_ids: vulnIds } : {})
+        });
+        const data = await res.json();
+        currentTriageData = data;
+
+        statusBar.innerText = data.report.summary;
+        latencyMsg.innerText = `Triaged in ${data.latency_ms}ms (${data.steps_taken} agent steps)`;
+
+        renderComparison(data);
+        if (data.report.findings.length > 0) {
+          selectFinding(data.report.findings[0]);
+        }
+      } catch (e) {
+        statusBar.innerText = 'Error running triage: ' + e;
+      }
+    }
+
+    // Render Side-by-Side Comparison
+    function renderComparison(data) {
+      const baselineContainer = document.getElementById('baseline-items');
+      const graphContainer = document.getElementById('graph-items');
+      baselineContainer.innerHTML = '';
+      graphContainer.innerHTML = '';
+
+      // Baseline Cards
+      data.baseline_ranking.forEach((item, idx) => {
+        const card = document.createElement('div');
+        const isCritical = item.cvss >= 9.0;
+        card.className = `p-2.5 rounded-lg border transition cursor-pointer ${
+          isCritical ? 'bg-rose-950/20 border-rose-900/40 hover:border-rose-700' : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+        }`;
+        card.innerHTML = `
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-bold text-slate-200">#${idx + 1} ${item.vuln_id}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isCritical ? 'bg-rose-500/20 text-rose-400' : 'bg-amber-500/20 text-amber-400'}">
+              CVSS ${item.cvss}
+            </span>
+          </div>
+          <div class="text-[10px] text-slate-400 mt-1 flex items-center justify-between">
+            <span>Priority: <strong>${item.verdict.toUpperCase()}</strong></span>
+            ${isCritical ? '<span class="text-rose-400">⚠️ False Urgency</span>' : '<span class="text-slate-500">Buries Ingress</span>'}
+          </div>
+        `;
+        card.onclick = () => {
+          const finding = data.report.findings.find(f => f.vuln_id === item.vuln_id);
+          if (finding) selectFinding(finding);
+        };
+        baselineContainer.appendChild(card);
+      });
+
+      // Graph-Aware Cards
+      data.report.findings.forEach((finding, idx) => {
+        const card = document.createElement('div');
+        const isPatchNow = finding.verdict === 'patch_immediately';
+        const isDeprioritized = finding.verdict === 'deprioritize';
+
+        card.className = `p-2.5 rounded-lg border transition cursor-pointer ${
+          isPatchNow
+            ? 'bg-emerald-950/30 border-emerald-800/60 hover:border-emerald-500 glow-green'
+            : isDeprioritized
+              ? 'bg-slate-900/40 border-slate-800/60 hover:border-slate-700 opacity-70'
+              : 'bg-amber-950/20 border-amber-900/40 hover:border-amber-700'
+        }`;
+
+        card.innerHTML = `
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-bold text-white">#${idx + 1} ${finding.vuln_id}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${
+              isPatchNow ? 'bg-emerald-500/20 text-emerald-300' : isDeprioritized ? 'bg-slate-800 text-slate-400' : 'bg-amber-500/20 text-amber-300'
+            }">
+              Risk ${finding.graph_risk_score}
+            </span>
+          </div>
+          <div class="text-[10px] text-slate-300 mt-1 flex items-center justify-between">
+            <span class="font-semibold ${isPatchNow ? 'text-emerald-400' : 'text-slate-400'}">
+              ${finding.verdict.replace('_', ' ').toUpperCase()}
+            </span>
+            <span class="${finding.has_internet_exposure ? 'text-cyan-400' : 'text-slate-500'}">
+              ${finding.has_internet_exposure ? '🌐 Ingress Exposed' : '🔒 Internal'}
+            </span>
+          </div>
+        `;
+        card.onclick = () => selectFinding(finding);
+        graphContainer.appendChild(card);
+      });
+    }
+
+    // Select a Finding & Highlight
+    function selectFinding(finding) {
+      selectedFinding = finding;
+      document.getElementById('detail-empty').classList.add('hidden');
+      document.getElementById('detail-content').classList.remove('hidden');
+
+      document.getElementById('detail-vuln-id').innerText = `${finding.vuln_id} (CVSS: ${finding.cvss_raw} → Graph Risk: ${finding.graph_risk_score})`;
+      
+      // OSV metadata population
+      const sourceBadge = document.getElementById('detail-source-badge');
+      sourceBadge.innerText = finding.source || 'OSV.dev';
+      sourceBadge.className = `px-2 py-0.5 rounded text-xs font-semibold ${
+        finding.source === 'OSV.dev'
+          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+          : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+      }`;
+
+      document.getElementById('detail-pkg-name').innerText = `${finding.package_name || 'package'}@${finding.package_version || ''}`;
+      document.getElementById('detail-fix-ver').innerText = finding.fix_version || 'unknown';
+      document.getElementById('detail-summary').innerText = finding.summary || '';
+
+      const osvLink = document.getElementById('detail-osv-link');
+      if (finding.osv_url && finding.osv_url.startsWith('http')) {
+        osvLink.href = finding.osv_url;
+        osvLink.classList.remove('hidden');
+      } else {
+        osvLink.classList.add('hidden');
+      }
+
+      const badge = document.getElementById('detail-verdict-badge');
+      badge.innerText = finding.verdict.replace('_', ' ');
+      badge.className = `px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
+        finding.verdict === 'patch_immediately'
+          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+          : finding.verdict === 'deprioritize'
+            ? 'bg-slate-800 text-slate-400 border border-slate-700'
+            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+      }`;
+
+      const expBadge = document.getElementById('detail-exposure-badge');
+      expBadge.innerText = finding.has_internet_exposure
+        ? `🌐 Internet Entry Point (Max Data: ${finding.max_data_sensitivity.toUpperCase()})`
+        : `🔒 Airgapped / Internal (Data: ${finding.max_data_sensitivity.toUpperCase()})`;
+
+      document.getElementById('detail-rationale').innerText = finding.rationale;
+
+      const evList = document.getElementById('detail-evidence-list');
+      evList.innerHTML = '';
+      if (finding.evidence_paths && finding.evidence_paths.length > 0) {
+        finding.evidence_paths.forEach(p => {
+          const li = document.createElement('div');
+          li.innerText = '• ' + p;
+          evList.appendChild(li);
+        });
+      } else {
+        evList.innerHTML = '<div>• No reachable attack path to sensitive datastores discovered.</div>';
+      }
+
+      // Configure approval button
+      const approvalBox = document.getElementById('detail-approval-box');
+      if (finding.decision_id) {
+        approvalBox.innerHTML = `
+          <button onclick="approveDecision('${finding.decision_id}')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg shadow-lg shadow-emerald-900/30 flex items-center gap-2 transition">
+            <span>✓ Approve Ticket (${finding.decision_id})</span>
+          </button>
+        `;
+      } else {
+        approvalBox.innerHTML = `<span class="text-xs text-slate-500 italic">No staged action required</span>`;
+      }
+
+      // Highlight in canvas
+      loadGraphPath(finding.vuln_id);
+    }
+
+    // Approve Decision Endpoint
+    async function approveDecision(decisionId) {
+      try {
+        const res = await fetch(`/approve/${decisionId}`, { method: 'POST' });
+        const data = await res.json();
+        alert(`Ticket Approved!\nTicket ID: ${data.ticket_id}\nAssigned Team: ${data.owning_team} (${data.service})\nSaved to tickets.jsonl`);
+        updateTicketCount();
+        if (selectedFinding) {
+          document.getElementById('detail-approval-box').innerHTML = `
+            <span class="px-3 py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold text-xs border border-emerald-500/30">
+              ✓ APPROVED: ${data.ticket_id}
+            </span>
+          `;
+        }
+      } catch (e) {
+        alert('Approval failed: ' + e);
+      }
+    }
+
+    async function updateTicketCount() {
+      try {
+        const res = await fetch('/tickets');
+        const data = await res.json();
+        document.getElementById('ticket-badge-count').innerText = data.count || 0;
+      } catch (e) {}
+    }
+
+    // Modal Handlers
+    document.getElementById('btn-triage-benchmark').onclick = () => triggerTriage(null);
+    document.getElementById('btn-triage-osv').onclick = () => triggerTriage([
+      'GHSA-f23m-r3pf-42rh', 'GHSA-8cf7-32gw-wr33', 'GHSA-9hjg-9r4m-mvj7', 'CVE-2021-DECOY-01'
+    ]);
+
+    document.getElementById('btn-zoom-fit').onclick = () => {
+      if (graphInstance) graphInstance.zoomToFit(400);
+    };
+
+    // Trace Modal
+    document.getElementById('btn-toggle-trace').onclick = () => {
+      if (!currentTriageData || !currentTriageData.trace) return;
+      const container = document.getElementById('trace-steps-container');
+      container.innerHTML = '';
+      currentTriageData.trace.forEach(step => {
+        const div = document.createElement('div');
+        div.className = 'p-3 rounded bg-slate-950 border border-slate-800 space-y-1';
+        div.innerHTML = `
+          <div class="flex items-center justify-between text-slate-300">
+            <span class="font-bold text-emerald-400">Step ${step.step}: [${step.call_type.toUpperCase()}] ${step.tool_name || ''}</span>
+            <span class="text-slate-500">${new Date(step.timestamp * 1000).toLocaleTimeString()}</span>
+          </div>
+          ${step.arguments ? `<div class="text-slate-400 text-[11px]">Inputs: ${JSON.stringify(step.arguments)}</div>` : ''}
+          ${step.result ? `<div class="text-slate-300 text-[11px] overflow-x-auto bg-slate-900/60 p-1.5 rounded max-h-32"><pre>${JSON.stringify(step.result, null, 2)}</pre></div>` : ''}
+        `;
+        container.appendChild(div);
+      });
+      document.getElementById('trace-modal').classList.remove('hidden');
+    };
+
+    document.getElementById('btn-close-trace').onclick = () => {
+      document.getElementById('trace-modal').classList.add('hidden');
+    };
+
+    // Tickets Modal
+    document.getElementById('btn-view-tickets').onclick = async () => {
+      const res = await fetch('/tickets');
+      const data = await res.json();
+      const container = document.getElementById('tickets-list-container');
+      container.innerHTML = '';
+
+      if (!data.tickets || data.tickets.length === 0) {
+        container.innerHTML = '<div class="text-slate-500 italic p-4 text-center">No approved tickets found yet. Approve an action above to create one.</div>';
+      } else {
+        data.tickets.forEach(t => {
+          const div = document.createElement('div');
+          div.className = 'p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1 text-slate-300';
+          div.innerHTML = `
+            <div class="flex items-center justify-between">
+              <strong class="text-emerald-400 font-mono">${t.ticket_id}</strong>
+              <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">APPROVED</span>
+            </div>
+            <div class="text-xs">Finding: <strong class="text-white">${t.vuln_id}</strong> | Team: <strong class="text-cyan-300">${t.owning_team}</strong> (${t.service})</div>
+            <div class="text-xs text-slate-400">Action: <code class="text-amber-300">${t.action_type}</code> (Risk: ${t.risk_score}/10.0)</div>
+            <div class="text-xs text-slate-400 italic">${t.rationale}</div>
+          `;
+          container.appendChild(div);
+        });
+      }
+      document.getElementById('tickets-modal').classList.remove('hidden');
+    };
+
+    document.getElementById('btn-close-tickets').onclick = () => {
+      document.getElementById('tickets-modal').classList.add('hidden');
+    };
+
+    // Startup
+    window.addEventListener('DOMContentLoaded', () => {
+      initForceGraph();
+      updateTicketCount();
+      // Auto-run benchmark triage on initial load
+      triggerTriage(null);
+    });
+  </script>
+</body>
+</html>

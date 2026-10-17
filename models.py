@@ -8,9 +8,15 @@ from pydantic import BaseModel, Field
 
 class FindingVerdict(BaseModel):
     """
-    Individual vulnerability verdict validated with graph-grounded evidence.
+    Individual vulnerability verdict validated with graph-grounded evidence and OSV metadata.
     """
-    vuln_id: str = Field(..., description="Vulnerability CVE identifier")
+    vuln_id: str = Field(..., description="Vulnerability CVE or GHSA identifier")
+    source: str = Field(default="OSV.dev", description="Data origin (OSV.dev or Benchmark Planted)")
+    summary: Optional[str] = Field(None, description="Vulnerability description / title from OSV database")
+    package_name: Optional[str] = Field(None, description="Name of the affected software package")
+    package_version: Optional[str] = Field(None, description="Version of the affected package installed in services")
+    fix_version: Optional[str] = Field(None, description="Remediation fix version from OSV")
+    osv_url: Optional[str] = Field(None, description="Direct URL to OSV.dev vulnerability entry")
     cvss_raw: float = Field(..., description="Raw CVSS base score (0.0 - 10.0)")
     graph_risk_score: float = Field(..., description="Graph-adjusted risk score (0.0 - 10.0)")
     verdict: Literal["patch_immediately", "schedule_maintenance", "deprioritize"] = Field(

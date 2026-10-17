@@ -14,5 +14,26 @@ services:
       timeout: 3s
       retries: 5
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vulngraph-app
+    ports:
+      - "8000:8000"   # FastAPI Web UI & API
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - FALKORDB_GRAPH=vulngraph
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - API_PORT=8000
+      - API_HOST=0.0.0.0
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   falkordb_data:

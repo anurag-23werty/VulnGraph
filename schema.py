@@ -31,6 +31,10 @@ def get_graph(graph_name: str = FALKORDB_GRAPH):
     return client.select_graph(graph_name)
 
 
+# Convenience alias
+get_graph_client = get_graph
+
+
 def init_schema(graph) -> None:
     """
     Initializes graph indexes for high-performance Cypher traversals.

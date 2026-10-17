@@ -146,17 +146,37 @@ async def run_deterministic_triage(vuln_ids: List[str]) -> TriageResponse:
             ))
             step_num += 1
 
-        # Rationale formulation
+        # Extract OSV metadata from context
+        pkg_name = ctx["packages"][0]["name"] if ctx.get("packages") else "unknown"
+        pkg_ver = ctx["packages"][0]["version"] if ctx.get("packages") else "unknown"
+        fix_ver = ctx.get("fix_version", "unknown")
+        summary_text = ctx.get("summary", "")
+        is_planted = "SLEEPER" in vid or "DECOY" in vid
+        source_label = "Benchmark Planted" if is_planted else "OSV.dev"
+        osv_link = f"https://osv.dev/vulnerability/{vid}" if not is_planted else f"Planted {vid}"
+
+        # Rationale formulation citing OSV source and graph impact
+        if is_planted:
+            prefix = f"Benchmark evaluation scenario {vid}"
+        else:
+            prefix = f"OSV.dev finding {vid} ({summary_text[:70]}...)"
+
         rationale = (
-            f"Ground-truth graph traversal for {vid} (CVSS: {ctx['cvss']}): "
-            f"Impacts {len(impacted)} services ({', '.join(impacted)}). "
+            f"{prefix} affecting package '{pkg_name}@{pkg_ver}' in service(s) {', '.join(impacted)}. "
             f"Internet exposure: {risk['has_internet_exposure']}. "
             f"Max data sensitivity: '{risk['max_data_sensitivity']}'. "
+            f"Fix version: {fix_ver}. "
             f"Deterministic graph risk score: {risk['graph_risk_score']}/10.0."
         )
 
         findings.append(FindingVerdict(
             vuln_id=vid,
+            source=source_label,
+            summary=summary_text,
+            package_name=pkg_name,
+            package_version=pkg_ver,
+            fix_version=fix_ver,
+            osv_url=osv_link,
             cvss_raw=ctx["cvss"],
             graph_risk_score=risk["graph_risk_score"],
             verdict=risk["verdict"],
