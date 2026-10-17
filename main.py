@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +28,9 @@ import queries
 from pdf_generator import generate_incident_pdf
 from langgraph_workflow import run_langgraph_triage
 from security_guardrails import run_agentic_security_audit
+from logger import logger, request_id_ctx
+from auth import Role, User, require_role, get_current_user
+from rate_limiter import rate_limit_triage
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -42,20 +45,61 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware for frontend flexibility
+# Hardened CORS: Explicit origins list with environment override
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000")
+allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins if allowed_origins else ["http://localhost:8000"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def correlation_and_logging_middleware(request: Request, call_next):
+    """
+    Assigns a unique request_id to every call, tracks latency,
+    and logs structured JSON events.
+    """
+    req_id = request.headers.get("X-Request-ID") or f"req-{uuid.uuid4().hex[:12]}"
+    token = request_id_ctx.set(req_id)
+    t0 = time.time()
+    try:
+        response = await call_next(request)
+        latency = round((time.time() - t0) * 1000, 2)
+        response.headers["X-Request-ID"] = req_id
+        logger.info(
+            f"{request.method} {request.url.path} -> {response.status_code} ({latency}ms)",
+            extra={"extra_data": {"status_code": response.status_code, "latency_ms": latency}}
+        )
+        return response
+    except Exception as exc:
+        latency = round((time.time() - t0) * 1000, 2)
+        logger.error(
+            f"Unhandled exception on {request.method} {request.url.path}: {str(exc)}",
+            exc_info=True,
+            extra={"extra_data": {"latency_ms": latency}}
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error occurred during graph operation.",
+                "request_id": req_id,
+            },
+            headers={"X-Request-ID": req_id}
+        )
+    finally:
+        request_id_ctx.reset(token)
 
 
 class TriageRequest(BaseModel):
     vuln_ids: Optional[List[str]] = Field(
         default=None,
-        description="List of CVE IDs to triage. If omitted, triages the 6 ground-truth benchmark findings."
+        max_length=25,
+        description="List of CVE IDs to triage (capped at 25). If omitted, triages the 6 ground-truth benchmark findings."
     )
 
 
@@ -88,7 +132,10 @@ def health_check():
 
 
 @app.get("/findings")
-def list_findings(limit: int = 50):
+def list_findings(
+    limit: int = Query(default=50, ge=1, le=200, description="Max findings to return"),
+    user: User = Depends(require_role(Role.VIEWER))
+):
     """
     Lists available vulnerability findings in the graph.
     """
@@ -123,7 +170,11 @@ def list_findings(limit: int = 50):
 
 
 @app.post("/triage", response_model=TriageResponse)
-async def triage_findings(req: Optional[TriageRequest] = None):
+async def triage_findings(
+    req: Optional[TriageRequest] = None,
+    user: User = Depends(require_role(Role.ANALYST)),
+    _rate_limit = Depends(rate_limit_triage)
+):
     """
     Runs the agent to triage findings, compute graph-adjusted risks,
     stage proposals, and return side-by-side rankings + execution trace.
@@ -133,11 +184,15 @@ async def triage_findings(req: Optional[TriageRequest] = None):
         response = await run_groq_agent_triage(vuln_ids)
         return response
     except Exception as e:
+        logger.error(f"Triage execution failed for user {user.username}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Triage execution failed: {str(e)}")
 
 
 @app.get("/baseline")
-def get_baseline_ranking(limit: int = 25):
+def get_baseline_ranking(
+    limit: int = Query(default=25, ge=1, le=200),
+    user: User = Depends(require_role(Role.VIEWER))
+):
     """
     Returns traditional CVSS-only baseline ranking for findings in the graph.
     Demonstrates naive vulnerability prioritization before graph intelligence.
@@ -431,7 +486,11 @@ def export_incident_pdf(vuln_id: str):
 
 
 @app.post("/triage/langgraph/{vuln_id}")
-def run_langgraph_agent(vuln_id: str):
+def run_langgraph_agent(
+    vuln_id: str,
+    user: User = Depends(require_role(Role.ANALYST)),
+    _rate_limit = Depends(rate_limit_triage)
+):
     """
     Executes the multi-agent LangGraph triage workflow:
       Investigator -> Security Guardrail -> Remediation Specialist -> Human Approval Staging.
@@ -455,11 +514,15 @@ def run_langgraph_agent(vuln_id: str):
             "execution_trace": result["execution_trace"],
         }
     except Exception as e:
+        logger.error(f"LangGraph execution failed for user {user.username}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"LangGraph execution failed: {str(e)}")
 
 
 @app.get("/guardrails/{vuln_id}")
-def check_security_guardrails(vuln_id: str):
+def check_security_guardrails(
+    vuln_id: str,
+    user: User = Depends(require_role(Role.VIEWER))
+):
     """
     Executes production Agentic Security audit against FalkorDB and returns provenance hash.
     """
